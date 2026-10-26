@@ -1362,12 +1362,9 @@ function shiftAdvertiserWeekKey(key, delta){
 async function getAdvertiserReferralCount(nick){
     if(!nick) return 0;
     try{
-        const statsSnap=await get(advertiserStatsRef(nick));
-        const resetAt=Number(statsSnap.val()?.resetAt||0);
-        const qRef=query(ref(db,'users'),orderByChild('invitedBy'),equalTo(nick));
-        const snap=await get(qRef);
-        const users=snap.val()||{};
-        return Object.values(users).filter(u=>Number(u?.referralCreatedAt||u?.createdAt||0)>resetAt).length;
+        const {data,error}=await supabase.rpc('kp_referral_summary',{p_target:nick});
+        if(error)throw error;
+        return Number(data?.count||0);
     }catch(e){
         console.warn('[advertiser referral count]',nick,e);
         return 0;
@@ -1384,12 +1381,9 @@ async function incrementAdvertiserReferralCount(nick){
 }
 async function clearAdvertiserReferralStats(){
     if(currentNick!==ADMIN) throw new Error('Только для мэра');
-    const snap=await get(ref(db,'users'));
-    const users=snap.val()||{};
-    const advertisers=Object.entries(users).filter(([nick,u])=>hasMunicipalJob(u,JOB_ADVERTISER)).map(([nick])=>nick);
-    const resetAt=Date.now();
-    await Promise.all(advertisers.map(nick=>set(advertiserStatsRef(nick),{total:0,resetAt,updatedAt:resetAt})));
-    return advertisers.length;
+    const {data,error}=await supabase.rpc('kp_mayor_clear_referrals');
+    if(error)throw error;
+    return Number(data?.cleared||0);
 }
 window.getAdvertiserReferralCount=getAdvertiserReferralCount;
 window.clearAdvertiserReferralStats=clearAdvertiserReferralStats;
@@ -3883,11 +3877,15 @@ window.savingsDeposit=async function(){
     if(!await requireSpendable()) return;
     const amt=parseInt(qs('savingsAmt')?.value||'0',10)||0;
     if(amt<=0) return toast('⚠️ Введите сумму','gold');
-    const snap=await get(userRef(currentNick)); const u=snap.val()||{};
-    if((u.balance||0)<amt) return toast('❌ Недостаточно средств','red');
-    const savings = Number(u.savingsBalance||0)+amt;
-    await update(userRef(currentNick), { balance: (u.balance||0)-amt, savingsBalance: savings, savingsLastInterestAt: u.savingsLastInterestAt || Date.now() });
-    await logTx(currentNick, { type:'out', who:'Накопительный счёт', amt, desc:'Пополнение накопительного счёта' });
+    try{
+        const {data,error}=await supabase.rpc('kp_savings_move',{
+            p_direction:'deposit',p_amount:amt,p_request_id:crypto.randomUUID()
+        });
+        if(error)throw error;
+        if(!data?.ok)throw new Error('Операция не проведена');
+        allUsersCache[currentNick]={...(allUsersCache[currentNick]||{}),
+            balance:Number(data.balance),savingsBalance:Number(data.savingsBalance)};
+    }catch(e){return toast('❌ Пополнение не выполнено: '+(e.message||e),'red');}
     if(qs('savingsAmt')) qs('savingsAmt').value='';
     toast(`📈 +${amt}₽ на накопительный счёт`,'green');
     renderSavingsDisplay();
@@ -3895,10 +3893,15 @@ window.savingsDeposit=async function(){
 window.savingsWithdraw=async function(){
     const amt=parseInt(qs('savingsAmt')?.value||'0',10)||0;
     if(amt<=0) return toast('⚠️ Введите сумму','gold');
-    const snap=await get(userRef(currentNick)); const u=snap.val()||{};
-    if((u.savingsBalance||0)<amt) return toast('❌ Недостаточно на накопительном счёте','red');
-    await update(userRef(currentNick), { balance: (u.balance||0)+amt, savingsBalance: (u.savingsBalance||0)-amt });
-    await logTx(currentNick, { type:'in', who:'Накопительный счёт', amt, desc:'Снятие с накопительного счёта' });
+    try{
+        const {data,error}=await supabase.rpc('kp_savings_move',{
+            p_direction:'withdraw',p_amount:amt,p_request_id:crypto.randomUUID()
+        });
+        if(error)throw error;
+        if(!data?.ok)throw new Error('Операция не проведена');
+        allUsersCache[currentNick]={...(allUsersCache[currentNick]||{}),
+            balance:Number(data.balance),savingsBalance:Number(data.savingsBalance)};
+    }catch(e){return toast('❌ Снятие не выполнено: '+(e.message||e),'red');}
     if(qs('savingsAmt')) qs('savingsAmt').value='';
     toast(`💰 Снято ${amt}₽ с накопительного счёта`,'green');
     renderSavingsDisplay();
@@ -4588,6 +4591,26 @@ window.doTransfer = async function(){
     if(!toUser) return toast('❌ Получатель не найден','red');
     const to = toUser.nick;
     if(to===currentNick)return toast('⚠️ Нельзя себе','gold');if(amt<=0)return toast('⚠️ Введите сумму','gold');
+
+    // The wallet debit, recipient credit, and commission are committed by a
+    // single server-side transaction. Legacy client fallback is disabled.
+    try{
+        const {data,error}=await supabase.rpc('kp_bank_transfer',{
+            p_recipient:to,p_amount:amt,p_request_id:crypto.randomUUID()
+        });
+        if(error)throw error;
+        if(!data?.success)throw new Error('Сервер отклонил перевод');
+        if(qs('bTo'))qs('bTo').value='';
+        if(qs('bAmt'))qs('bAmt').value='';
+        if(allUsersCache[currentNick])allUsersCache[currentNick].balance=Number(data.balance);
+        await pushNotification(to,`💰 Перевод ${amt}₽ от ${currentNick}`,'money');
+        toast(`💸 ${amt}₽ → ${displayNick(toUser)} (комиссия ${Number(data.commission||0)}₽)`,'green');
+        renderRecentTransfers();renderFinancialStats();
+    }catch(e){
+        console.error('[bank transfer]',e);
+        toast('❌ Перевод не выполнен: '+(e.message||e),'red');
+    }
+    return;
 
     const[fromSnap,toSnap]=await Promise.all([get(userRef(currentNick)),get(userRef(to))]);
     const fromUser = fromSnap.val();
@@ -5617,13 +5640,20 @@ async function checkDailyTaskCondition(taskId, u, ordersVal, marketVal, chatVal,
         default: return false;
     }
 }
-async function creditTaskRewardOnce(taskKey, reward, title, claimedKey, claimValue){
+const failedAutoTaskClaims=new Set();
+async function creditTaskRewardOnce(taskKey, reward, title, claimedKey, claimValue, silent=false){
     if(!await requireNotMigrant('заработок через задания недоступен')) return false;
     const dailyId = claimedKey ? String(claimValue || '') : '';
     const kind = dailyId ? 'daily' : 'once';
     const id = dailyId || String(taskKey || '');
     try {
-        const result = await claimVerifiedTask(kind,id);
+        const result=(kind==='once' && !['rewardedAvatar','rewardedWall'].includes(id))
+          ? await (async()=>{
+              const {data,error}=await supabase.rpc('kp_claim_migrated_once',{p_task_id:id});
+              if(error)throw error;
+              return data;
+            })()
+          : await claimVerifiedTask(kind,id);
         if(!result?.claimed)return false;
         const fresh = (await get(userRef(currentNick))).val() || {};
         allUsersCache[currentNick] = fresh;
@@ -5634,7 +5664,7 @@ async function creditTaskRewardOnce(taskKey, reward, title, claimedKey, claimVal
         return true;
     } catch(e) {
         console.warn('[tasks] server reward:',e);
-        toast('Награда не выдана: '+e.message,'red');
+        if(!silent)toast('Награда не выдана: '+e.message,'red');
         return false;
     }
 }
@@ -5836,12 +5866,13 @@ window.renderTasks = async function(){
         }
 
         if(!isMigrantUser(u)){
-            const pendingRewards = oneTimeTasks.filter(t=>t.done && !u[t.key]);
+            const pendingRewards = oneTimeTasks.filter(t=>t.done && !u[t.key] && !failedAutoTaskClaims.has(t.key));
             if(pendingRewards.length){
                 // Reconcile old/completed one-time tasks in the background.
                 Promise.all(pendingRewards.map(async t=>{
                     try{
-                        const ok = await creditTaskRewardOnce(t.key, t.reward, `Одноразовое задание: ${t.title}`);
+                        const ok = await creditTaskRewardOnce(t.key, t.reward, `Одноразовое задание: ${t.title}`,null,null,true);
+                        if(!ok)failedAutoTaskClaims.add(t.key);
                         return ok;
                     }catch(e){ console.warn('[task auto reward]',e); return false; }
                 })).then(results=>{
@@ -6472,12 +6503,20 @@ window.adminSetKveScore=async function(){
     if(!snap.exists()){if(statusEl)statusEl.textContent='❌ Житель не найден';return;}
     const now=new Date();
     const dateStr=now.toLocaleDateString('ru');
-    await update(userRef(target),{kveScore:score,kveExamDate:dateStr,kveScoreSetBy:ADMIN,kveScoreSetAt:Date.now()});
+    try{
+        const {error}=await supabase.rpc('kp_mayor_update_resident',{
+            p_target:target,p_action:'kve',p_value:score
+        });
+        if(error)throw error;
+    }catch(e){
+        if(statusEl)statusEl.textContent='Ошибка установки балла: '+(e.message||e);
+        return;
+    }
     const isPassed=score>=32;
     const available=getKveJobAccess(score).join(', ')||'нет';
     const msg=`📝 Результат КВЭ: ${score} баллов. ${isPassed?'✅ Порог пройден. Доступные профессии: '+available:'❌ Ниже минимума (32). Обратитесь к мэру.'}`;
     await pushNotification(target,msg,'system');
-    await logTx(target,{type:'in',who:'Мэрия',amt:0,desc:`КВЭ выставлен: ${score} баллов`});
+    // KVE is recorded by the server; never append an untrusted wallet txlog.
     if(statusEl)statusEl.innerHTML=`<span style="color:var(--primary);">✅ Балл ${score} выставлен жителю <b>${target}</b>. Уведомление отправлено.</span>`;
     if(qs('kveScoreInput'))qs('kveScoreInput').value='';
     // Refresh user list in select
@@ -6524,18 +6563,13 @@ async function renderAdvertiserWorkStats(){
 }
 async function renderAdminAdvertiserStats(){
     const host=qs('adminAdvertiserStats'); if(!host) return;
-    const [snap, statsSnap] = await Promise.all([get(ref(db,'users')), get(ref(db,'advertiserStats'))]);
-    const users=snap.val()||{};
-    const stats=statsSnap.val()||{};
-    const rows=[];
-    for(const [nick,u] of Object.entries(users)){
-        if(!hasMunicipalJob(u,JOB_ADVERTISER)) continue;
-        const resetAt=Number(stats[nick]?.resetAt||0);
-        const count=Object.values(users).filter(x=>x&&String(x.invitedBy||'')===nick&&Number(x.referralCreatedAt||x.createdAt||0)>resetAt).length;
-        rows.push({nick:displayNick(u)||nick,count});
-    }
-    rows.sort((a,b)=>b.count-a.count||a.nick.localeCompare(b.nick,'ru'));
-    host.innerHTML=rows.length?`<div style="display:grid;gap:6px;">${rows.map(r=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:10px;"><span>${escHtml(r.nick)}</span><b style="color:var(--primary);">${r.count}</b></div>`).join('')}</div>`:'<div style="color:var(--muted);font-size:13px;">Нет активных рекламщиков</div>';
+    try{
+        const {data,error}=await supabase.rpc('kp_referral_summary');
+        if(error)throw error;
+        const rows=Array.isArray(data)?data:[];
+        rows.sort((a,b)=>Number(b.count||0)-Number(a.count||0)||String(a.nick).localeCompare(String(b.nick),'ru'));
+        host.innerHTML=rows.length?`<div style="display:grid;gap:6px;">${rows.map(r=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:10px;"><span>${escHtml(r.nick)}</span><b style="color:var(--primary);">${Number(r.count||0)}</b></div>`).join('')}</div>`:'<div style="color:var(--muted);font-size:13px;">Нет активных рекламщиков</div>';
+    }catch(e){console.warn('[advertiser stats]',e);host.textContent='Не удалось получить статистику: '+(e.message||e);}
 }
 window.adminClearAdvertiserStats=async function(){
     if(currentNick!==ADMIN)return toast('❌ Только для мэра','red');
@@ -6676,8 +6710,8 @@ async function renderAdminDeputyProposals() {
     const el = qs('adminDeputyProposals');
     if (!el) return;
     try {
-        const snap = await get(ref(db, 'deputyProposals'));
-        const all = snap.val() || {};
+        const {data:all,error:queueError}=await supabase.rpc('kp_mayor_queue',{p_branch:'deputyProposals'});
+        if(queueError)throw queueError;
         const pending = Object.values(all).filter(p => p.status === 'pending').sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
         const done = Object.values(all).filter(p => p.status !== 'pending').sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0,5);
         if (!pending.length && !done.length) { el.innerHTML = '<div style="color:var(--muted);font-size:13px;">Нет предложений</div>'; return; }
@@ -6706,9 +6740,11 @@ async function renderAdminDeputyProposals() {
 window.reviewDeputyProposal = async function(id, status) {
     const commentEl = qs('dpComment_' + id);
     const comment = (commentEl?.value || '').trim();
-    await update(ref(db, `deputyProposals/${id}`), { status, adminComment: comment || null, reviewedAt: Date.now() });
-    const snap = await get(ref(db, `deputyProposals/${id}`));
-    const p = snap.val();
+    const {data,error}=await supabase.rpc('kp_mayor_review_queue',{
+        p_branch:'deputyProposals',p_id:id,p_status:status,p_comment:comment
+    });
+    if(error)return toast('Ошибка решения: '+error.message,'red');
+    const p = data?.request;
     if (p && p.author) {
         const msg = status === 'approved' ? `✅ Ваше предложение «${p.title}» одобрено мэрией!${comment?' Комментарий: '+comment:''}` : `❌ Ваше предложение «${p.title}» отклонено.${comment?' Причина: '+comment:''}`;
         await pushNotification(p.author, msg, 'system');
@@ -6722,8 +6758,8 @@ async function renderAdminAtmRequests() {
     const el = qs('adminAtmRequests');
     if(!el) return;
     try {
-        const snap = await get(ref(db, 'atmRequests'));
-        const all = snap.val() || {};
+        const {data:all,error:queueError}=await supabase.rpc('kp_mayor_queue',{p_branch:'atmRequests'});
+        if(queueError)throw queueError;
         const pending = Object.values(all).filter(r => r.status === 'pending').sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
         const done = Object.values(all).filter(r => r.status !== 'pending').sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0, 8);
         if(!pending.length && !done.length){
@@ -6751,9 +6787,11 @@ async function renderAdminAtmRequests() {
     }
 }
 window.reviewAtmRequest = async function(id, status){
-    await update(ref(db, `atmRequests/${id}`), { status, reviewedAt: Date.now() });
-    const snap = await get(ref(db, `atmRequests/${id}`));
-    const r = snap.val();
+    const {data,error}=await supabase.rpc('kp_mayor_review_queue',{
+        p_branch:'atmRequests',p_id:id,p_status:status,p_comment:null
+    });
+    if(error)return toast('Ошибка решения: '+error.message,'red');
+    const r = data?.request;
     if(r && r.client){
         const msg = status === 'approved'
             ? `✅ Ваша заявка банкомата принята мэрией.`
@@ -6786,15 +6824,10 @@ window.adminForceHire = async function(){
         // skips the KVE requirement. Regular applications (sendApp/approveApp)
         // continue to enforce it as before.
         const fresh = (await get(userRef(target))).val() || u;
-        const emps = collectEmploymentsFromData(fresh, target);
-        const newEmp = { id: `muni_${job}`, type: 'municipal', role: job };
-        const patch = { job, vehicle:'', employments:[...emps.filter(e=>e.id!==newEmp.id), newEmp], displayJob: fresh.displayJob || job };
-        if(job===JOB_ADVERTISER){ Object.assign(patch, { advertiserSalaryPaidThroughWeek: advertiserWeekKey(), advertiserStartedWeek: advertiserWeekKey() }); }
-        if(job===JOB_JANITOR){ Object.assign(patch, {janitorTaskDate:todayKey(), janitorSubmissionId:'', janitorSubmissionStatus:'ready', janitorProof:'', janitorComment:''}); }
-        else { Object.assign(patch, {janitorTaskDate:'', janitorSubmissionId:'', janitorSubmissionStatus:'', janitorProof:'', janitorComment:''}); }
-        await update(userRef(target), patch);
-        const logId = genId();
-        await set(ref(db, `adminForceHireLog/${logId}`), { id: logId, admin: currentNick, targetNick: target, job, bypassKve: true, createdAt: Date.now() });
+        const {error:hireError}=await supabase.rpc('kp_mayor_update_resident',{
+            p_target:target,p_action:'job',p_value:job
+        });
+        if(hireError)throw hireError;
         await pushNotification(target, `🏛 Мэрия назначила вас на должность: ${job}`, 'system');
         if(statusEl) statusEl.innerHTML = `<span style="color:var(--primary);">✅ ${displayNick(fresh)||target} назначен(а) на «${job}» (без проверки КВЭ)</span>`;
         toast(`🏛 ${target} → ${job}`,'green');
@@ -6845,19 +6878,16 @@ window.adminMoney=async function(){
         const amt=/^-?\d+$/.test(amtRaw) ? Number(amtRaw) : NaN;
         if(!target)return toast('⚠️ Выберите жителя','gold');
         if(!Number.isSafeInteger(amt)||amt===0)return toast('⚠️ Укажите целую сумму','gold');
-        const balanceRef=ref(db, `users/${target}/balance`);
-        const result=await runTransaction(balanceRef,currentBalance=>{
-            const balance=Number(currentBalance||0);
-            if(!Number.isFinite(balance))return;
-            const nextBalance=balance+amt;
-            if(!Number.isSafeInteger(nextBalance))return;
-            return nextBalance;
+        // Protected balances are changed atomically by the mayor-only server
+        // function. Never write users/<other>/balance directly.
+        const {data:result,error:adjustError}=await supabase.rpc('kp_mayor_adjust_balance',{
+            p_target:target,p_delta:amt,p_request_id:crypto.randomUUID()
         });
-        if(!result?.committed)return toast('❌ Не удалось изменить баланс','red');
-        const committedUser=(await get(userRef(target))).val()||{};
+        if(adjustError)throw adjustError;
+        if(!result?.ok)return toast('❌ Не удалось изменить баланс','red');
+        const committedUser={...((await get(userRef(target))).val()||{}),balance:Number(result.balance)};
         allUsersCache[target]=committedUser;window.allUsersCache=allUsersCache;
-        if(amt>0) await logTx(target,{type:'in',who:'Мэрия',amt,desc:'Зачисление от мэрии'});
-        else await logTx(target,{type:'out',who:'Мэрия',amt:Math.abs(amt),desc:'Списание мэрией'});
+        // Ledger history is written inside kp_mayor_adjust_balance.
         await pushNotification(target,`${amt>0?'💰 Зачислено':'💸 Списано'} ${Math.abs(amt).toLocaleString('ru-RU')} ₽ мэром`,'money');
         if(qs('adminAmt'))qs('adminAmt').value='';
         if(target===currentNick){updateHeader(committedUser);updateHeader_balance(committedUser);}
@@ -6884,26 +6914,18 @@ window.adminFineWorker=async function(){
     _adminFineBusy=true;
     try {
         const snap=await get(userRef(target));if(!snap.exists())return toast('❌ Не найден','red');
-        // Вызываем Cloud Function с fallback
-        const result = await callFunctionWithFallback('adminAdjustBalance', { 
-            uid: target, 
-            amount: -amt, // Отрицательное значение для списания
-            type: 'fine',
-            description: `Штраф от мэрии: ${reason}`
-        }, fallbackAdminAdjustBalance);
+        const {data:mayorFine,error:fineError}=await supabase.rpc('kp_mayor_fine',{
+            p_target:target,p_amount:amt,p_reason:reason,p_request_id:crypto.randomUUID()
+        });
+        if(fineError)throw fineError;
+        const result={success:!!mayorFine?.ok,newBalance:Number(mayorFine?.balance||0)};
         
         if (result.success) {
             // Проверяем и обновляем статус заморозки аккаунта
             const userSnap = await get(userRef(target));
             const user = userSnap.val();
             const newBal = result.newBalance;
-            const patch = {};
-            if (newBal <= MIN_BALANCE_ALLOWED) patch.accountFrozen = true;
-            
-            if (Object.keys(patch).length > 0) {
-                await update(userRef(target), patch);
-            }
-            await window.addMunicipalTreasury?.(amt, `Штраф от мэрии: ${reason}`, {sourceNick:target,sourceType:'fine'});
+            // Server already moved the fine into the protected treasury.
             
             await pushNotification(target,`💸 Штраф ${amt}₽ от мэрии. Причина: ${reason}`,'money');
             qs('adminFineAmt').value='';if(qs('adminFineReason'))qs('adminFineReason').value='';
@@ -6927,7 +6949,10 @@ window.adminSetMigrant = async function(on){
     if(on && already) return toast('✅ Уже мигрант','gold');
     if(!on && !already) return toast('✅ Роли нет','gold');
     try{
-        await update(userRef(target), { roles: { ...(u.roles||{}), migrant: !!on } });
+        const {error:roleError}=await supabase.rpc('kp_mayor_update_resident',{
+            p_target:target,p_action:'migrant',p_value:!!on
+        });
+        if(roleError)throw roleError;
         await pushNotification(target, on
             ? `🧾 Мэрия выдала роль «${ROLE_MIGRANT}». Ограничения: без заданий/переводов/маркетплейса.`
             : `♻ Мэрия сняла роль «${ROLE_MIGRANT}».`,
@@ -6980,7 +7005,12 @@ window.adminFireWorker=async function(){
                 if(e.role===JOB_JANITOR){ Object.assign(patch,{janitorTaskDate:'',janitorSubmissionId:'',janitorSubmissionStatus:'',janitorProof:'',janitorComment:''}); }
             }
             try {
-                await update(userRef(target), patch);
+                for(const employment of muniEmps){
+                    const {error}=await supabase.rpc('kp_mayor_update_resident',{
+                        p_target:target,p_action:'fire',p_value:employment.role
+                    });
+                    if(error)throw error;
+                }
                 await pushNotification(target,'🚪 Мэрия уволила вас со всех работ','system');
                 toast(`🚪 ${target} уволен со всех работ`,'red');
                 if(typeof window.renderAdmin==='function') window.renderAdmin();
@@ -7005,7 +7035,10 @@ window.adminFireWorker=async function(){
         if(targetRole==='Водитель'||targetRole==='Доставщик') patch.vehicle='';
         if(targetRole===JOB_ADVERTISER) patch.advertiserSalaryPaidThroughWeek = advertiserWeekKey();
         if(targetRole===JOB_JANITOR){ Object.assign(patch,{janitorTaskDate:'',janitorSubmissionId:'',janitorSubmissionStatus:'',janitorProof:'',janitorComment:''}); }
-        await update(userRef(target), patch);
+        const {error:fireError}=await supabase.rpc('kp_mayor_update_resident',{
+            p_target:target,p_action:'fire',p_value:targetRole
+        });
+        if(fireError)throw fireError;
         await pushNotification(target,`🚪 Мэрия уволила вас с должности «${targetRole}»`,'system');
         toast(`🚪 ${target} уволен с «${targetRole}»`,'red');
         if(typeof window.renderAdmin==='function') window.renderAdmin();
@@ -13819,6 +13852,19 @@ async function renderHospitalJobsCard(){
 
 // Inline HTML handlers execute in the window scope, while this file is an ES module.
 // Expose the few function declarations that are referenced directly by inline attributes.
+window.openImageFullscreen = function(url){
+    const src=String(url||'');
+    if(!/^(https:\/\/|data:image\/(png|jpeg|webp);base64,)/i.test(src))return;
+    const shade=document.createElement('div');
+    shade.style.cssText='position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.94);display:flex;align-items:center;justify-content:center;padding:20px;cursor:zoom-out;';
+    shade.setAttribute('role','dialog');shade.setAttribute('aria-label','Просмотр фотографии');
+    const photo=document.createElement('img');photo.src=src;photo.alt='Фотография';
+    photo.style.cssText='max-width:100%;max-height:94vh;object-fit:contain;box-shadow:0 14px 60px #0009;';
+    const close=()=>{shade.remove();document.removeEventListener('keydown',onKey);};
+    const onKey=e=>{if(e.key==='Escape')close();};
+    shade.addEventListener('click',close);document.addEventListener('keydown',onKey);
+    shade.appendChild(photo);document.body.appendChild(shade);
+};
 window.renderOnlineDuelLobby = renderOnlineDuelLobby;
 window.snakeStartNew = snakeStartNew;
 window.renderBizOwnerPanel = renderBizOwnerPanel;

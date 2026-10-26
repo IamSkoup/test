@@ -292,30 +292,19 @@ ready(function(){
   async function showAdminLicenseStatus(target){
     const el = qs('adminLicenseStatus'); if(!el) return;
     try {
-      const l = (await get(licenseRef(target))).val() || {};
+      const {data:l,error}=await window.KAPANI_BRIDGE.supabase.rpc('kp_license_status',{p_target:target});
+      if(error)throw error;
       el.innerHTML = `<b>${escHtml(target)}</b> · 🚲 ${l.bike?'✅':'❌'} · 🛵 ${l.scooter?'✅':'❌'}`;
     } catch(e){ el.innerHTML = `<span style="color:var(--red);">Ошибка: ${escHtml(e.message||e.code||'')}</span>`; }
   }
 
   async function writeLicense(target, patch){
-    // основной путь — licenses/{nick}; fallback — users/{nick}/licenses
-    try {
-      const cur = (await get(ref(db, `licenses/${target}`))).val() || {};
-      Object.assign(cur, patch);
-      await set(ref(db, `licenses/${target}`), cur);
-      return;
-    } catch(e1){
-      console.error('[license licenses/]', e1);
-      try {
-        const cur2 = (await get(ref(db, `users/${target}/licenses`))).val() || {};
-        Object.assign(cur2, patch);
-        await set(ref(db, `users/${target}/licenses`), cur2);
-        return;
-      } catch(e2){
-        console.error('[license users/]', e2);
-        throw e2;
-      }
-    }
+    const kind = Object.keys(patch).find(k=>k==='bike'||k==='scooter');
+    if(!kind)throw new Error('Неверная категория прав');
+    const {error}=await window.KAPANI_BRIDGE.supabase.rpc('kp_mayor_update_resident',{
+      p_target:target,p_action:'license',p_value:{kind,enabled:!!patch[kind]}
+    });
+    if(error)throw error;
   }
 
   window.adminGrantLicense = async function(kind){
