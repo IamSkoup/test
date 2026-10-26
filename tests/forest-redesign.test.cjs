@@ -6,7 +6,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
-const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8')+'\n'+
+  fs.readFileSync(path.join(root, 'assets/kapani-main-classic.js'), 'utf8');
 const ui = fs.readFileSync(path.join(root, 'assets/kapani-ui.js'), 'utf8');
 const forest = fs.readFileSync(path.join(root, 'assets/kapani-forest.css'), 'utf8');
 

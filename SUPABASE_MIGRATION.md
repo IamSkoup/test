@@ -123,7 +123,20 @@ The leaderboard now uses a default avatar when none was saved, and a failed
 avatar URL also falls back. Account password changes use Supabase Auth, not
 client-side `passwordHash`. Avatar changes do not require mayoral confirmation.
 
-Open `start-kapani.bat` to preview the extracted website on Windows. Opening
-`index.html` directly with the `file://` protocol is unsupported because the
-browser blocks ES Modules. The HTML now explains that failure instead of
-showing an endless server connection animation.
+The website now supports opening `index.html` directly from a local folder
+with `file://` (for example, by double-clicking it on Windows). Startup uses
+ordered, deferred classic JavaScript scripts instead of same-origin ES module
+imports. The Supabase browser SDK still loads from jsDelivr, so a working
+internet connection is required to sign in or read/write account data.
+`start-kapani.bat` remains an optional local HTTP preview. Browser push,
+Service Workers and PWA installation require HTTPS, not `file://`.
+
+`supabase/003_protected_app_operations.sql` is the follow-up migration for
+passports, administrative account verification, municipal treasury snapshot,
+treasury withdrawal/clear, and weekly account maintenance. It must be applied
+in the Supabase SQL Editor after migrations 001 and 002 *before* deploying the
+matching frontend; copying HTML alone does not create these functions.
+Protected legacy operations not covered by the migration, including arbitrary
+business fees, salaries, savings interest and many cashier/casino commands,
+remain unavailable. Never relax row-level security to make those work; they
+need individually audited transactional server functions.

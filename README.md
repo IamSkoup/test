@@ -17,3 +17,10 @@ published or tested with two signed-in users on the target GitHub Pages URL.
 The bridge deliberately rejects client-side money and role mutations:
 legacy economic operations need the protected `kp_*` Supabase RPCs before
 public release. See the migration status for the remaining work.
+
+To preview the current archive, open `index.html` directly; it also supports
+the `file://` protocol without Python or a local web server. Internet access
+is still needed for Supabase. Push notifications require HTTPS. Before
+deploying this frontend, apply `supabase/003_protected_app_operations.sql` in
+the Supabase SQL Editor. Other legacy money-changing UI features remain
+blocked until their corresponding server procedures are implemented.

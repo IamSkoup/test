@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../assets/kapani-main-classic.js'), 'utf8');
 const navSource = html.match(/window\.navTo=function\(id\)\{[\s\S]*?\n\};/)?.[0];
 assert.ok(navSource, 'main navigation function must exist');
 

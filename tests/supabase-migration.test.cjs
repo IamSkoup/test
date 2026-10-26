@@ -7,13 +7,17 @@ const vm=require('node:vm');
 const {webcrypto}=require('node:crypto');
 
 const home=path.resolve(__dirname,'..');
-const html=fs.readFileSync(path.join(home,'index.html'),'utf8');
+const documentHtml=fs.readFileSync(path.join(home,'index.html'),'utf8');
+// Main entry points are deferred classic scripts so local file:// opens work.
+const html=[documentHtml,'assets/kapani-main-classic.js','assets/kapani-pack-classic.js']
+  .map((source,i)=>i?fs.readFileSync(path.join(home,source),'utf8'):source).join('\n');
 const bridge=fs.readFileSync(path.join(home,'supabase-bridge.js'),'utf8');
 const migration=fs.readFileSync(path.join(home,'supabase/001_tree_bridge.sql'),'utf8');
 const accountFixes=fs.readFileSync(path.join(home,'supabase/002_account_and_tasks.sql'),'utf8');
 
 test('the site uses Supabase as the only active client data provider',()=>{
-  assert.match(html,/from '\.\/supabase-bridge\.js'/);
+  assert.match(documentHtml,/src="\.\/assets\/supabase-bridge-classic\.js" defer/);
+  assert.match(documentHtml,/src="https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.49\.8" defer/);
   assert.doesNotMatch(html,/from ["']https:\/\/www\.gstatic\.com\/firebasejs/);
   assert.match(bridge,/kp_tree_access/);
   assert.match(migration,/enable row level security/i);
@@ -101,10 +105,29 @@ test('task rewards and cash-outs never accept a client-set balance',()=>{
   assert.doesNotMatch(accountFixes,/reward:=p_/);
 });
 
-test('file protocol displays an actionable start instruction',()=>{
-  assert.match(html,/location\.protocol === 'file:'/);
-  assert.match(html,/start-kapani\.bat/);
+test('file protocol loads ordered classic scripts without requiring a local server',()=>{
+  assert.match(documentHtml,/location\.protocol === 'file:'/);
+  assert.match(documentHtml,/src="\.\/assets\/kapani-main-classic\.js" defer/);
+  assert.match(documentHtml,/src="\.\/assets\/kapani-pack-classic\.js" defer/);
+  assert.match(documentHtml,/src="\.\/assets\/kapani-season-classic\.js" defer/);
+  assert.doesNotMatch(documentHtml,/<script type="module"/);
+  assert.doesNotMatch(documentHtml,/Сайт запущен неправильно/);
   assert.match(fs.readFileSync(path.join(home,'start-kapani.bat'),'utf8'),/python -m http\.server 8765/);
+});
+
+test('privileged actions call server functions, not direct user or treasury mutations',()=>{
+  const app=fs.readFileSync(path.join(home,'assets/kapani-main-classic.js'),'utf8');
+  const pack=fs.readFileSync(path.join(home,'assets/kapani-pack-classic.js'),'utf8');
+  const protectedSql=fs.readFileSync(path.join(home,'supabase/003_protected_app_operations.sql'),'utf8');
+  assert.match(app,/supabase\.rpc\('kp_process_economy_charges'\)/);
+  assert.match(app,/supabase\.rpc\('kp_verify_account'/);
+  assert.match(app,/supabase\.rpc\('kp_municipal_treasury_withdraw'/);
+  assert.match(documentHtml,/rpc\('kp_municipal_treasury_snapshot'\)/);
+  assert.match(pack,/\.rpc\('kp_save_passport'/);
+  assert.doesNotMatch(pack,/set\(ref\(db, `passports\/\$\{nick\}`\), payload\)/);
+  assert.match(protectedSql,/auth\.uid\(\)/);
+  assert.match(protectedSql,/where user_id=auth\.uid\(\)/);
+  assert.match(protectedSql,/for update/);
 });
 
 test('client routes profile and notification changes through owner-only procedures',async()=>{
