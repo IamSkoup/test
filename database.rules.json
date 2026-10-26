@@ -1,0 +1,170 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "siteAppearance": {
+      ".read": "auth != null",
+      ".write": "auth != null && auth.token.admin == true",
+      ".validate": "newData.hasChildren(['month', 'updatedAt']) && newData.child('month').isNumber() && newData.child('month').val() >= 1 && newData.child('month').val() <= 12 && newData.child('updatedAt').isNumber()"
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || auth.token.admin == true)",
+        ".write": "auth.token.admin == true",
+        "balance": {
+          ".write": "false"
+        },
+        "adminMoney": {
+          ".write": "auth.token.admin == true"
+        },
+        "fine": {
+          ".write": "auth.token.admin == true"
+        },
+        "accountVerified": {
+          ".write": "auth.token.admin == true"
+        },
+        "accountFrozen": {
+          ".write": "auth.token.admin == true"
+        },
+        "job": {
+          ".write": "auth.token.admin == true"
+        },
+        "vehicle": {
+          ".write": "auth.uid == $uid"
+        },
+        "avatar": {
+          ".write": "auth.uid == $uid"
+        },
+        "avatarFrame": {
+          ".write": "auth.uid == $uid"
+        },
+        "profileBgEffect": {
+          ".write": "auth.uid == $uid"
+        },
+        "profileCustomBg": {
+          ".write": "auth.uid == $uid && root.child('users').child($uid).child('subscription').val() == 'prime'",
+          ".validate": "newData.isString() && newData.val().beginsWith('data:image/jpeg;base64,') && newData.val().length <= 240000"
+        },
+        "chatBubbleStyle": {
+          ".write": "auth.uid == $uid"
+        },
+        "profileDescription": {
+          ".write": "auth.uid == $uid"
+        },
+        "nicknameEmoji": {
+          ".write": "auth.uid == $uid"
+        },
+        "subscription": {
+          ".write": "auth.token.admin == true"
+        },
+        "subscriptionExpiry": {
+          ".write": "auth.token.admin == true"
+        },
+        "txlog": {
+          ".read": "auth.uid == $uid",
+          ".write": "false"
+        },
+        "notifications": {
+          ".read": "auth.uid == $uid",
+          ".write": "false"
+        },
+        "pinnedChats": {
+          ".read": "auth.uid == $uid",
+          ".write": "auth.uid == $uid"
+        },
+        "notificationTokens": {
+          ".read": false,
+          ".write": false
+        },
+        "pushSettings": {
+          ".read": "auth != null && auth.uid == $uid",
+          ".write": false
+        },
+        "pushSubscriptions": {
+          ".read": "false",
+          ".write": "false"
+        }
+      }
+    },
+    "orders": {
+      ".read": "auth != null",
+      ".write": "false",
+      "$orderId": {
+        ".write": "false"
+      }
+    },
+    "chat": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": [
+        "nick",
+        "createdAt"
+      ]
+    },
+    "dms": {
+      "$key": {
+        ".read": "auth != null && $key.contains(auth.uid)",
+        ".write": "auth != null && $key.contains(auth.uid)",
+        "messages": {
+          "$msgId": {
+            ".write": "auth != null && $key.contains(auth.uid)"
+          },
+          ".indexOn": [
+            "createdAt"
+          ]
+        },
+        "lastRead": {
+          "$uid": {
+            ".write": "auth.uid == $uid"
+          }
+        }
+      }
+    },
+    "market": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$listingId": {
+        "status": {
+          ".write": "auth.uid == data.child('seller').val() || auth.token.admin == true"
+        }
+      }
+    },
+    "walls": {
+      "$nick": {
+        ".read": "auth != null",
+        ".write": "auth.uid == $nick",
+        "$postId": {
+          ".write": "auth.uid == $nick"
+        }
+      }
+    },
+    "apps": {
+      ".read": "auth != null",
+      ".write": "auth.token.admin == true"
+    },
+    "notifications": {
+      "$uid": {
+        ".read": "auth.uid == $uid",
+        ".write": "false"
+      }
+    },
+    "janitor_submissions": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$submissionId": {
+        "status": {
+          ".write": "auth.token.admin == true"
+        }
+      }
+    },
+    "pushSubscriptionIndex": {
+      ".read": "false",
+      ".write": "false"
+    },
+    "marketplace": {
+      ".indexOn": [
+        "seller"
+      ]
+    }
+  }
+}

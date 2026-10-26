@@ -1,0 +1,26 @@
+Kapani — client-side fixes applied
+================================
+
+1. Unified client configuration in config.js; index.html and Firebase Messaging Service Worker consume the shared config.
+2. Preserved the effective existing client values (including taxi price-per-km and Prime subscription) while removing the conflicting duplicate config object.
+3. Removed the duplicate profileDescription DOM id; visitor profile now uses vpfDescription.
+4. Removed obsolete renderBizCartUI code that produced another bizOrderNameInput.
+5. Replaced stacked navTo monkey-patches with one unified navigation hook.
+6. Kept currentNick synchronized with window.currentNick across login/start/logout flows.
+7. Replaced silent startup data-load catches with explicit console errors while retaining degraded-mode UI behavior.
+8. Added a bounded readiness timeout to the additive module to prevent an endless retry loop if its main-client bridge never appears.
+9. Exposed module-scoped functions used by inline HTML handlers (renderOnlineDuelLobby, snakeStartNew, renderBizOwnerPanel).
+10. Removed static duplicate reactionBtn ids from mutually-exclusive game templates.
+11. Preserved Firebase/Auth/Rules/Firestore/RTDB backend architecture and did not modify database.rules.json or Cloud Functions logic.
+
+Validation performed:
+- Node syntax checks for all inline scripts, config.js, service worker, and Cloud Functions.
+- Static duplicate-id scan.
+- Static local-reference existence scan.
+- Inline handler/global availability scan.
+
+
+12. Fixed post-login blank shell: the application UI is revealed immediately after authentication; slow/failed Firebase reads no longer block rendering, and startup services are isolated from fatal initialization errors.
+13. Fixed KSB/police fine workflow: input validation happens before locking the button; balance deduction and transaction logging are completed independently from notifications; notification failures can no longer make the fine appear stuck.
+14. Fixed name synchronization: changing the public name now updates displayName and nick, renames the users/<nick> Firebase record when the generated nick changes, preserves password verification via passwordHashSalt, updates local/session auth state, and migrates walls/transactions/business employee references.
+15. Added automatic realtime-listener rebinding after a nick rename so the SPA continues working without a page reload.

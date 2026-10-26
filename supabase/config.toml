@@ -1,0 +1,2 @@
+[functions.kapani-push]
+verify_jwt = false

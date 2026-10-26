@@ -1,0 +1,402 @@
+/*
+ * Kapani Forest — the visual layer for the existing functional application.
+ * Loaded last so seasonal accents cannot turn the interface back to beige.
+ * Keep navigation IDs, actions, forms and database-bound components intact.
+ */
+:root,
+html[data-season] {
+  color-scheme: dark;
+  --bg: #071711;
+  --surface: #10281e;
+  --surface2: #183528;
+  --border: rgba(162, 202, 164, .18);
+  --primary: #a9c995;
+  --pri-dim: rgba(124, 173, 116, .14);
+  --gold: #dfc38b;
+  --gold-dim: rgba(223, 195, 139, .12);
+  --red: #ec8783;
+  --red-dim: rgba(236, 135, 131, .14);
+  --text: #eff5ec;
+  --muted: #b0c1b2;
+  --shadow: 0 14px 42px rgba(0, 0, 0, .19);
+  --r: 16px;
+  --r-sm: 11px;
+  --season-page: #071711;
+  --season-card: #10281e;
+  --season-raised: #183528;
+  --season-border: rgba(162, 202, 164, .18);
+  --season-text: #eff5ec;
+  --season-muted: #b0c1b2;
+  --season-hero: #183d2b;
+  --season-nav: #0b2119;
+  --season-nav-text: #eff5ec;
+  --season-primary: #a9c995;
+  --season-action: #326c4a;
+  --season-action-text: #f5faf3;
+  --season-field: #10261d;
+  --season-radius: 13px;
+  --season-pattern: none;
+  --season-secondary: #dfc38b;
+  --season-secondary-soft: #3d3526;
+  --season-danger: #ec8783;
+  --season-danger-soft: #402b2b;
+  --season-ink: #0b2119;
+  --season-soft: #1c3a29;
+  --season-light: #071711;
+  --season-line: #487658;
+}
+html[data-season], html[data-season] body { color: var(--text); }
+html[data-season] body {
+  background-color: #071711 !important;
+  background-image: linear-gradient(110deg, rgba(5,17,12,.94), rgba(6,24,16,.84)), url('./forest-road.webp') !important;
+  background-attachment: fixed;
+  background-position: center;
+  background-size: cover;
+}
+body::before, body::after { display: none !important; }
+body { font-size: 14px; line-height: 1.48; }
+button, input, textarea, select { font-family: 'Nunito', sans-serif; }
+button:focus-visible, a:focus-visible, [role="button"]:focus-visible {
+  outline: 2px solid #d7e7ad !important;
+  outline-offset: 3px;
+}
+html[data-season] input, html[data-season] textarea, html[data-season] select,
+html[data-season] select option {
+  background: #10261d !important;
+  border: 1px solid rgba(164,201,170,.25) !important;
+  color: #f1f5ed !important;
+  box-shadow: none !important;
+}
+html[data-season] input::placeholder, html[data-season] textarea::placeholder { color: #8fa596 !important; }
+input:focus, textarea:focus, select:focus { border-color: #91b78b !important; }
+html[data-season] .btn-primary { background: #326c4a !important; border-color: #568964 !important; color: #f4faed !important; }
+html[data-season] .btn-primary:hover { background: #3f8058 !important; }
+html[data-season] .btn-ghost { background: #1b3729 !important; color: #e7f1e5 !important; border-color: rgba(171,207,175,.21) !important; }
+html[data-season] .btn-gold { background: #473b27 !important; border-color: #806c45 !important; color: #f1d9a4 !important; }
+html[data-season] .btn-red { background: #6b302e !important; border-color: #9d4945 !important; color: #fff0eb !important; }
+.btn { text-transform: none; letter-spacing: .01em; font-weight: 800; border-radius: 10px; }
+.btn:hover { filter: brightness(1.08); }
+.card, .status-card, .stat-box, .market-card, .work-order, .order-card,
+.rent-card, .cart-card, .dm-user-row, .lb-row, .notif-item, .biz-card {
+  box-shadow: 0 9px 28px rgba(0,0,0,.14) !important;
+}
+html[data-season] .card, html[data-season] .status-card, html[data-season] .stat-box,
+html[data-season] .market-card, html[data-season] .work-order {
+  background: rgba(15,39,29,.95) !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+}
+.card { padding: clamp(16px, 1.7vw, 24px); }
+.card-title { font-size: 14px; font-weight: 900; color: #bed5ac !important; letter-spacing: .005em; }
+.item-row, .cart-item, .order-item, .rent-row, .total-row { background: rgba(23,51,36,.9) !important; }
+.header-links button { border-radius: 8px; }
+.g-header { background: rgba(8,29,20,.96) !important; border: 1px solid rgba(159,194,155,.16); border-radius: 14px; }
+.brand-lockup strong { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 24px; letter-spacing: .13em; }
+.brand-lockup strong i { color: #c3d7a7; }
+.brand-lockup small { font-size: 10px; }
+.h-avatar { border-color: #789b72; }
+.h-bal { border: 1px solid rgba(154,201,151,.24) !important; background: #1c3d2c !important; color: #f3f5e9 !important; font-weight: 900; }
+.h-job { color: #bdd1b7 !important; }
+.page-wrap { padding-top: calc(100px + env(safe-area-inset-top, 0px)); }
+.page-wrap > .section:not(#home):not(#adminPage)::before {
+  color: #f2f4e9;
+  font: 700 clamp(25px,2.4vw,35px) Georgia,serif;
+  letter-spacing: -.02em;
+  border-bottom: 1px solid rgba(171,210,172,.2);
+  margin-bottom: 23px;
+}
+.page-wrap > .section:not(#home):not(#adminPage) { max-width: 1260px; margin: 0 auto; }
+.page-wrap > .section:not(#home):not(#adminPage) > .card { max-width: 100%; }
+html[data-season] .bottom-nav { background: rgba(9,31,21,.96) !important; border-color: rgba(168,199,164,.22); }
+.bn-item { color: #abc0ae; }
+.bn-item .ico { width: 24px; height: 24px; }
+.bn-item .ico svg { stroke-width: 1.8; }
+html[data-season] .bottom-nav .bn-item.sel,
+html[data-season] .bottom-nav .bn-item:hover {
+  color: #e9f7db !important;
+  background: rgba(115,166,103,.16) !important;
+  border-radius: 11px;
+}
+.sections-drawer-panel { background: #10291f !important; }
+.sections-drawer-links button { background: #1d392b !important; color: #f1f5ec !important; border-color: var(--border) !important; }
+.mayor-heading { background: linear-gradient(105deg,#142e21,#28543a) !important; border: 1px solid var(--border); }
+.mayor-tabs { background: #142b20; border-color: var(--border); }
+.mayor-tabs button[aria-selected="true"] { background: #2a6243; color: #f5f9ed; }
+.mayor-overview-lead, .mayor-resident-card { background: #1c3b2b !important; }
+.mayor-queue-grid button, .mayor-resident-actions button { background: #183529 !important; border-color: var(--border) !important; color: var(--text) !important; }
+.mayor-search { background: #142e23; border-color: var(--border); }
+.market-tab, .msg-tab, .biz-tab, .news-tab { border-radius: 9px; }
+.profile-header, .logo-card { background: #1b402c !important; border-color: var(--border) !important; }
+.season-effects-layer, .season-effects-toggle, .site-season-scene { display: none !important; }
+
+/* Main dashboard: one strong image, grouped controls, ample negative space. */
+#home { max-width: 1450px; margin: 0 auto; }
+#home .home-hero {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 220px;
+  min-height: 260px;
+  gap: 25px;
+  align-items: center;
+  position: relative;
+  isolation: isolate;
+  padding: clamp(24px,3.1vw,46px);
+  margin: 0 0 30px;
+  overflow: hidden;
+  border-radius: 18px !important;
+  border: 1px solid rgba(174,201,160,.28) !important;
+  background: linear-gradient(90deg,rgba(5,22,14,.92) 0%,rgba(7,26,18,.7) 45%,rgba(6,22,14,.33) 100%),url('./forest-road.webp') center 54%/cover no-repeat !important;
+  box-shadow: 0 20px 44px rgba(0,0,0,.23);
+}
+#home .home-hero::after { content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(0deg,rgba(6,20,14,.48),transparent 75%); }
+.hero-person { display:flex; align-items:center; gap:20px; }
+#home .hero-avatar { width:78px;height:78px;border-radius:18px;border:2px solid #b6c9ac;background:#0b241a;box-shadow:0 9px 26px rgba(0,0,0,.34); }
+#home .hero-kicker { font-size:12px;color:#cfddc5;letter-spacing:.01em;text-transform:none;font-weight:700;margin-bottom:9px; }
+.hero-welcome { font:500 clamp(24px,2.7vw,40px)/1.1 Georgia,serif; color:#f5f4e9; }
+#home .hero-name { font:700 clamp(31px,3.6vw,54px)/1.08 Georgia,serif;color:#fffdf4;letter-spacing:-.025em;text-shadow:0 3px 12px rgba(0,0,0,.26); }
+#home .hero-role { display:inline-flex;align-items:center;min-height:29px;padding:4px 13px;border-radius:999px;background:rgba(11,43,27,.82);border:1px solid rgba(171,205,163,.25);color:#dfebd8;margin-top:16px;font-size:12px; }
+#home .hero-rule { display:none; }
+#home .home-hero .stats-row { display:flex;flex-direction:column;gap:8px;margin:0; }
+#home .home-hero .stat-box {
+  min-height:66px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-direction:row;
+  padding:12px 17px;
+  background:rgba(8,32,21,.83) !important;
+  border:1px solid rgba(179,211,174,.28) !important;
+  border-radius:11px;
+  backdrop-filter:blur(8px);
+}
+#home .home-hero .stat-box .sv { order:2;font:700 24px Georgia,serif;color:#ecf4e6;white-space:nowrap; }
+#home .home-hero .stat-box .sl { order:1;margin:0;font-size:10px;font-weight:800;line-height:1.2;color:#b7ccb6;text-align:left; }
+#home .service-catalog { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;margin-bottom:25px; }
+#home .service-group-heading { border-bottom:1px solid rgba(167,205,171,.15);padding-bottom:11px;margin-bottom:15px; }
+#home .service-group-heading h2 { font:700 clamp(22px,2.1vw,28px) Georgia,serif;letter-spacing:-.015em;color:#f0f4e9 !important; }
+#home .service-group-heading p { color:#b0c2b2;font-size:12px;margin-top:4px; }
+#home .service-tiles { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px; }
+#home .service-group:first-child { grid-column:1/-1; }
+#home .service-group:first-child .service-tiles { grid-template-columns:repeat(3,minmax(0,1fr)); }
+#home .quick-card {
+  min-height:92px;
+  padding:16px 34px 16px 15px !important;
+  border:1px solid rgba(161,199,162,.2) !important;
+  border-radius:12px !important;
+  background:#102b20 !important;
+  box-shadow:none !important;
+  transition:transform .16s ease,border-color .16s ease,background .16s ease;
+}
+#home .quick-card:hover { transform:translateY(-2px);border-color:#779e76 !important;background:#193b2a !important; }
+#home .quick-card .qico { background:#20452e !important;color:#c5ddad !important;border:1px solid rgba(173,204,157,.16);border-radius:10px; }
+#home .quick-card .qlbl { color:#f2f6ed !important;font-size:14px;font-weight:900; }
+#home .quick-card .qsub { color:#adbeaf !important; font-size:11px; }
+#home .quick-card::after { color:#b8d0aa; }
+#home .service-group:first-child .quick-card {
+  min-height:142px;
+  align-content:end;
+  border-color:rgba(183,205,166,.27) !important;
+  background-size:cover !important;
+  background-position:center !important;
+}
+#home .service-group:first-child .quick-card:nth-child(1) {
+  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.18) 92%),url('./village-street.webp') !important;
+}
+#home .service-group:first-child .quick-card:nth-child(2) {
+  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.24) 92%),url('./forest-road.webp') !important;
+}
+#home .service-group:first-child .quick-card:nth-child(3) {
+  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.16) 92%),url('./village-street.webp') !important;
+  background-position:65% center !important;
+}
+#home .service-group:first-child .quick-card:hover { filter:brightness(1.13); }
+#home .service-group:first-child .quick-card .qico { background:rgba(8,37,23,.84) !important; }
+#home .service-group:first-child .quick-card .qsub { color:#d3e0d2 !important; }
+#home .home-help-row { display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:16px 18px;border:1px solid var(--border);border-radius:13px;background:rgba(16,42,30,.92);margin:4px 0 22px; }
+.home-help-row strong { display:block;font:700 19px Georgia,serif;color:#eff5e7; }
+.home-help-row small { color:#aabfad;font-size:12px; }
+.home-help-actions { display:flex;gap:8px;align-items:center;flex-wrap:wrap; }
+.home-help-actions .btn { width:auto;min-height:42px;padding:9px 15px;font-size:12px; }
+.home-map-details { margin:18px 0 30px;border:1px solid var(--border);border-radius:13px;background:rgba(13,37,27,.9);overflow:hidden; }
+.home-map-details summary { cursor:pointer;padding:17px 21px;font-weight:900;color:#dfedcf; }
+.home-map-details summary::marker { color:#a5ca9a; }
+.home-map-details[open] summary { border-bottom:1px solid var(--border); }
+.home-map-details .map-frame { width:100%;border:0;border-radius:9px; }
+#home #homeOrders:not(:empty) { margin:0 0 18px; }
+
+/* Loading screen: reveal the fir first, then the name. */
+#loadingOverlay {
+  background:linear-gradient(90deg,rgba(4,19,12,.87),rgba(3,18,12,.58)),url('./forest-road.webp') center / cover no-repeat !important;
+  color:#f5f5e9;
+  text-align:center;
+  isolation:isolate;
+  transition:opacity .46s ease,visibility .46s ease;
+}
+#loadingOverlay::before { content:'';position:absolute;inset:0;z-index:-1;background:radial-gradient(circle at 50% 44%,rgba(34,87,56,.38),transparent 38%),linear-gradient(0deg,rgba(3,13,9,.4),transparent 50%); }
+#loadingOverlay .lo-content { display:flex;flex-direction:column;align-items:center;width:min(90vw,420px);transform:translateY(-12px); }
+#loadingOverlay .lo-logo { width:150px;height:152px;margin:0 0 12px;background:none;border-radius:0;box-shadow:none;position:relative;display:grid;place-items:center;animation:none; }
+#loadingOverlay .lo-halo { position:absolute;inset:9px;border:1px solid rgba(178,224,165,.14);border-radius:50%;box-shadow:0 0 60px rgba(128,188,127,.11);opacity:0;animation:loHalo 1.1s ease .55s both; }
+#loadingOverlay .lo-pine { width:112px;height:124px;overflow:visible;filter:drop-shadow(0 3px 16px rgba(155,221,152,.28)); }
+#loadingOverlay .lo-tree-trunk { stroke:#d0d9af;stroke-width:5;stroke-linecap:round;fill:none;stroke-dasharray:34;stroke-dashoffset:34;animation:loDrawTrunk .6s ease .15s both; }
+#loadingOverlay .lo-tree-branch { fill:#96c495;stroke:#d5e8be;stroke-width:1.8;stroke-linejoin:round;transform-box:fill-box;transform-origin:center bottom;transform:scaleY(0);opacity:0; }
+#loadingOverlay .lo-tree-base { animation:loSprout .64s cubic-bezier(.18,.84,.27,1.2) .24s both; }
+#loadingOverlay .lo-tree-middle { fill:#b2d5a6;animation:loSprout .65s cubic-bezier(.18,.84,.27,1.2) .43s both; }
+#loadingOverlay .lo-tree-top { fill:#d4e6c0;animation:loSprout .66s cubic-bezier(.18,.84,.27,1.2) .61s both; }
+#loadingOverlay .lo-tree-detail { stroke:#e5f0cf;stroke-width:1.4;fill:none;opacity:0;animation:loHalo 1s ease 1s both; }
+#loadingOverlay .lo-title {
+  color:#fff9e9;
+  font:700 clamp(40px,6vw,57px)/1.1 Georgia,serif;
+  letter-spacing:.075em;
+  margin:0 0 7px;
+  opacity:0;
+  animation:loTitle .8s cubic-bezier(.2,.8,.22,1) .78s both;
+}
+#loadingOverlay .lo-sub { color:#bccfb8;letter-spacing:.19em;text-transform:uppercase;font-size:11px;font-weight:700;margin-bottom:34px;opacity:0;animation:loTitle .65s ease 1.02s both; }
+#loadingOverlay .lo-bar-wrap { width:min(255px,75vw);height:3px;border-radius:50px;background:rgba(195,217,188,.2);margin-bottom:18px;opacity:0;animation:loHalo .4s ease 1.2s both; }
+#loadingOverlay .lo-bar { background:linear-gradient(90deg,#5a9f72,#c5e2a8,#ead2a1);box-shadow:0 0 16px rgba(171,226,154,.5);animation:loBar 2.1s ease-out both; }
+#loadingOverlay.lo-complete .lo-bar { animation:none;width:100%;transition:width .25s ease; }
+#loadingOverlay .lo-status { color:#b4c8b3;font-size:12px;font-weight:700;letter-spacing:.03em;opacity:0;animation:loTitle .7s ease 1.22s both; }
+@keyframes loDrawTrunk { to { stroke-dashoffset:0; } }
+@keyframes loSprout { from { opacity:0;transform:translateY(14px) scaleY(0); } to { opacity:1;transform:translateY(0) scaleY(1); } }
+@keyframes loHalo { from { opacity:0;transform:scale(.86); } to { opacity:1;transform:scale(1); } }
+@keyframes loTitle { from { opacity:0;transform:translateY(14px);filter:blur(7px); } to { opacity:1;transform:translateY(0);filter:blur(0); } }
+
+/* Registration takes its visual identity from the same forest, not from a flat logo panel. */
+#authSection.active { max-width:1050px;margin:clamp(32px,8vh,110px) auto 0;display:grid;grid-template-columns:minmax(0,1fr) minmax(330px,440px);gap:0;border:1px solid var(--border);border-radius:19px;overflow:hidden;background:#0c241a;box-shadow:0 28px 70px rgba(0,0,0,.34); }
+#authSection.active > br { display:none; }
+#authSection .logo-card { margin:0;border:0!important;border-radius:0;background:linear-gradient(0deg,rgba(5,24,14,.9),rgba(5,24,14,.12)),url('./forest-road.webp') center/cover no-repeat !important;min-height:460px;display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-start;text-align:left;padding:42px; }
+#authSection .logo-title { color:#f0f3e8 !important;-webkit-text-fill-color:#f0f3e8 !important;font:700 clamp(31px,3vw,46px) Georgia,serif;letter-spacing:.08em; }
+#authSection .logo-sub { color:#c1d3bd !important; }
+#authSection > .card { border:0!important;border-radius:0!important;margin:0;padding:clamp(22px,3vw,44px);background:#0e271c !important;box-shadow:none!important; }
+#authSection .card-title { font:700 23px Georgia,serif;color:#f3f4e8 !important;text-transform:none; }
+
+/* Every interior page gets a constrained, intentional reading width. */
+#messages { max-width:920px !important; }
+#messages .msg-tabs, #market .market-tabs { max-width:650px;margin-left:auto;margin-right:auto; }
+#messages .msg-panel > .card, #messages .msg-panel .card {
+  border-radius:13px;
+}
+#messages #chatMessages, #messages #dmMessages {
+  height: min(54dvh,590px);
+  min-height:290px;
+  padding:13px 10px;
+  background:rgba(6,23,15,.54);
+  border:1px solid rgba(173,206,172,.12);
+  border-radius:11px;
+}
+#messages .chat-input-row { gap:8px; }
+#messages .chat-input-row input { min-height:43px;margin:0; }
+#messages .msg-tab, #market .market-tab { min-height:43px;flex:1; }
+#market { max-width:1200px !important; }
+#market .market-filter-row { display:flex;align-items:center;gap:12px;flex-wrap:wrap; }
+#market .market-filter-row select { max-width:320px;margin:0; }
+#market .market-panel > .card { max-width:750px;margin:0 auto 15px; }
+#shop, #taxi, #tasks, #ratings, #hospital, #events,
+#deliveryPage, #driverPage, #news, #newsDiscussion { max-width:970px !important; }
+#shop > .card, #taxi #taxiForm, #tasks > .card { max-width:800px;margin-left:auto;margin-right:auto; }
+#shop .item-row { gap:14px; }
+#shop .item-row > input { width:85px;flex-shrink:0; }
+#taxi .taxi-point-row { display:flex;gap:7px;align-items:center; }
+#taxi .taxi-info-row { gap:9px; }
+#taxi .taxi-info-box { background:#1a3b2a !important;border:1px solid var(--border) !important; }
+#messages .media-bar, #messages .emoji-panel { border-color:var(--border); }
+#bank.active, #jobs.active, #profile.active {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:15px;
+  align-items:start;
+}
+#bank.active::before, #jobs.active::before, #profile.active::before { grid-column:1/-1; }
+#bank > .card, #jobs > .card, #profile > .card { margin:0; }
+#bank > .card:nth-of-type(3), #bank > .card:nth-of-type(4) { min-height:180px; }
+#jobs #jobsAdvertiserStats { grid-column:1/-1; }
+#jobs > .card:nth-child(3) { grid-row:span 2; }
+#jobs > .card:nth-child(3) > div:not(.card-title) { line-height:1.8 !important; }
+#profile .profile-header {
+  min-width:0;
+  border:1px solid var(--border) !important;
+  border-radius:16px;
+  box-shadow:var(--shadow);
+  grid-row:span 2;
+}
+#profile > .card { min-width:0; }
+#profile .p-av { border-color:#b1caa5; }
+#profile .p-name { color:#f2f5e9; }
+#profile #inboxList { max-height:420px;overflow-y:auto; }
+.notif-item, .lb-row, .work-order { margin-bottom:8px; }
+.status-badge { border-radius:999px; }
+.modal, .modal-content, [role="dialog"] { background-color:var(--surface);color:var(--text); }
+
+@media (min-width:1080px) {
+  body { display:block; }
+  .container { width:calc(100% - 224px);max-width:none;margin-left:224px;padding:0 24px 32px; }
+  .page-wrap { max-width:1600px;margin:0 auto;padding:110px clamp(12px,2vw,32px) 50px; }
+  .g-header { left:calc(224px + (100% - 224px)/2);transform:translateX(-50%);width:calc(100% - 270px);max-width:1520px;top:12px;height:70px;padding:0 22px;justify-content:flex-end;border-radius:13px; }
+  .g-header::before { content:'Деревня среди лесов';margin-right:auto;color:#a8c5a7;font:italic 18px Georgia,serif; }
+  .brand-lockup, .header-links { display:none; }
+  .bottom-nav { position:fixed;top:12px;bottom:12px;left:12px;transform:none;width:202px;height:calc(100dvh - 24px);max-width:202px;border-radius:15px;padding:86px 10px 12px;display:flex;flex-direction:column;gap:3px;overflow:visible; }
+  .bottom-nav::before { content:'КАПАНИ';position:absolute;top:22px;left:17px;right:17px;color:#e5edd9;font:700 23px Georgia,serif;letter-spacing:.13em;border-bottom:1px solid rgba(178,211,173,.16);padding-bottom:18px; }
+  #bottomNav .bn-item { flex:0 0 auto;min-width:0;width:100%;display:flex;flex-direction:row;justify-content:flex-start;gap:15px;padding:12px 12px;text-align:left;font-size:12px;letter-spacing:.02em;min-height:46px; }
+  #bottomNav .bn-item .ico { width:23px;height:23px;flex-shrink:0; }
+  #bottomNav #bn6, #bottomNav #bn8, #bottomNav #bn9, #bottomNav #bn10, #bottomNav #bn11 { display:none!important; }
+  #bottomNav #bnMore { display:flex;margin-top:auto;border-top:1px solid rgba(170,206,168,.14);border-radius:0;padding-top:15px; }
+  #home .service-catalog { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:1079px) {
+  #bottomNav #bnMore { display:flex; }
+  .container { max-width:100%; }
+  .page-wrap { padding-bottom:calc(110px + env(safe-area-inset-bottom,0px)); }
+  .bottom-nav { box-shadow:0 -10px 30px rgba(0,0,0,.28); }
+  .bottom-nav .bn-item { flex:1 0 66px; }
+  #home .service-catalog { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  #home .service-group:first-child { grid-column:1/-1; }
+}
+@media (max-width:760px) {
+  html[data-season] body { background-image:linear-gradient(160deg,rgba(5,18,12,.95),rgba(7,27,17,.87)),url('./forest-road.webp') !important;background-attachment:scroll; }
+  .g-header { border-radius:0;top:0; }
+  .page-wrap { padding-top:calc(86px + env(safe-area-inset-top,0px)); }
+  #home .home-hero { grid-template-columns:1fr;min-height:275px;padding:22px;gap:20px; }
+  .hero-person { gap:13px;align-items:flex-end; }
+  #home .hero-avatar { width:59px;height:59px; }
+  #home .hero-name { font-size:34px; }
+  .hero-welcome { font-size:24px; }
+  #home .home-hero .stats-row { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px; }
+  #home .home-hero .stat-box { flex-direction:column;gap:3px;min-height:70px;padding:8px 5px;text-align:center; }
+  #home .home-hero .stat-box .sv { font-size:19px;order:0; }
+  #home .home-hero .stat-box .sl { order:1;text-align:center;font-size:8px; }
+  #home .service-catalog { grid-template-columns:1fr;gap:24px; }
+  #home .service-group:first-child { grid-column:auto; }
+  #home .service-group:first-child .service-tiles { grid-template-columns:1fr; }
+  #home .service-group:first-child .quick-card { min-height:104px; }
+  #home .service-tiles { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  #home .quick-card { min-height:90px;padding:11px 25px 11px 10px !important;grid-template-columns:35px minmax(0,1fr);column-gap:9px; }
+  #home .quick-card .qico { width:35px;height:35px; }
+  #home .quick-card .qico svg { width:19px;height:19px; }
+  #home .quick-card .qlbl { font-size:12px; }
+  #home .quick-card .qsub { font-size:10px; }
+  #home .quick-card::after { right:8px;font-size:22px; }
+  .home-help-row { align-items:stretch; }
+  .home-help-actions { width:100%; }
+  .home-help-actions .btn { flex:1; }
+  #authSection.active { margin:14px auto 25px;max-width:540px;grid-template-columns:1fr; }
+  #authSection .logo-card { min-height:185px;padding:24px; }
+  #bank.active, #jobs.active, #profile.active { grid-template-columns:1fr; }
+  #bank.active::before, #jobs.active::before, #profile.active::before,
+  #jobs #jobsAdvertiserStats { grid-column:auto; }
+  #jobs > .card:nth-child(3), #profile .profile-header { grid-row:auto; }
+  #messages #chatMessages, #messages #dmMessages { height:42dvh; }
+}
+@media (max-width:420px) {
+  #home .service-group:not(:first-child) .service-tiles { grid-template-columns:1fr; }
+  #home .quick-card { min-height:77px; }
+  #home .hero-name { font-size:28px; }
+  #home .home-hero .stat-box .sv { font-size:17px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  #loadingOverlay .lo-tree-trunk, #loadingOverlay .lo-tree-branch,
+  #loadingOverlay .lo-tree-detail, #loadingOverlay .lo-halo,
+  #loadingOverlay .lo-title, #loadingOverlay .lo-sub,
+  #loadingOverlay .lo-bar-wrap, #loadingOverlay .lo-status {
+    animation:none !important;opacity:1 !important;transform:none !important;filter:none !important;
+  }
+  #loadingOverlay .lo-tree-trunk { stroke-dashoffset:0; }
+}

@@ -1,0 +1,21 @@
+name = "kapani-free-push"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+FIREBASE_PROJECT_ID = "kapanisite"
+FIREBASE_DATABASE_URL = "https://kapanisite-default-rtdb.europe-west1.firebasedatabase.app"
+
+# Public Firebase Web API key is used only for Firebase Auth ID-token verification.
+FIREBASE_WEB_API_KEY = "AIzaSyCtMtRrKHsfYI4zb9CDuM6HiE56T7H1Ehw"
+
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[secrets]
+required = ["FIREBASE_SERVICE_ACCOUNT_JSON"]

@@ -1,0 +1,27 @@
+name = "kapani-push"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+ADMIN_NICK = "Кайон"
+FIREBASE_DATABASE_URL = "https://kapanisite-default-rtdb.europe-west1.firebasedatabase.app"
+# Must be the SAME key as webPushVapidPublicKey in config.js
+VAPID_PUBLIC_KEY = "BDZSBlWnSNkcfI3r3_MxxhqbYlofuvDw8885kJMR72Z-_jUsjSB_uwBfnM9sRQG6CGkGVBJz9Teal1P4YPNVkP4"
+VAPID_SUBJECT = "https://iamskoup1.github.io/kapani/"
+APP_URL = "https://iamskoup1.github.io/kapani/"
+ALLOWED_ORIGINS = "https://iamskoup1.github.io"
+# Pushes one invocation may send (the free plan has tight CPU/subrequest limits). Bigger audiences are split automatically.
+MAX_PUSH_PER_RUN = "10"
+
+[[kv_namespaces]]
+binding = "PUSH_KV"
+id = "8bef7e30520f4615aa32375cf58870c2"
+
+[triggers]
+crons = ["* * * * *"]
+
+# Firebase Spark is used for RTDB/Auth data; this Worker performs Web Push directly.
+# Secrets (set with `wrangler secret put`, never commit them):
+#   VAPID_PRIVATE_KEY
+#   FIREBASE_SERVICE_ACCOUNT_JSON

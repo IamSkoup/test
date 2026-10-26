@@ -1,0 +1,102 @@
+/* Shared seasonal art direction. Every token is used by the whole application. */
+html[data-season]{
+  --season-page:#e8f2f6;--season-card:#fff;--season-raised:#f1f8fa;
+  --season-border:#b8d3db;--season-text:#19353f;--season-muted:#4b6972;
+  --season-hero:#d4eaf1;--season-nav:#193c4b;--season-nav-text:#f5fbfd;
+  --season-primary:#225b70;--season-action:#225b70;--season-action-text:#fff;
+  --season-field:#fff;--season-radius:12px;--season-pattern:none;
+  --season-secondary:#755322;--season-secondary-soft:#f4e9ce;
+  --season-danger:#a43b3b;--season-danger-soft:#f7e1dc;
+  --bg:var(--season-page);--surface:var(--season-card);--surface2:var(--season-raised);
+  --border:var(--season-border);--text:var(--season-text);--muted:var(--season-muted);
+  --primary:var(--season-primary);--pri-dim:var(--season-hero);
+  --gold:var(--season-secondary);--gold-dim:var(--season-secondary-soft);
+  --red:var(--season-danger);--red-dim:var(--season-danger-soft);
+  --shadow:0 7px 24px rgba(23,49,52,.11);--r:var(--season-radius);--r-sm:calc(var(--season-radius) - 4px);
+  color-scheme:light;
+}
+/* January — clear, crystalline morning. */
+html[data-season="1"]{--season-page:#e0f0f5;--season-card:#fbfeff;--season-raised:#eaf7fa;--season-border:#a9ced9;--season-text:#183a48;--season-muted:#486b77;--season-hero:#c5e7ef;--season-nav:#174459;--season-primary:#205c77;--season-action:#205c77;--season-radius:10px;--season-pattern:repeating-linear-gradient(135deg,transparent 0 38px,rgba(93,157,179,.05) 38px 39px)}
+/* February — silver frost in blue twilight. */
+html[data-season="2"]{--season-page:#172238;--season-card:#24344f;--season-raised:#304463;--season-border:#547091;--season-text:#f4f7ff;--season-muted:#c0d1e5;--season-hero:#334d70;--season-nav:#101d32;--season-primary:#c7dcff;--season-action:#3b649c;--season-secondary:#edd7a7;--season-secondary-soft:#4d4350;--season-danger:#ffb8b0;--season-danger-soft:#5d3a48;--season-radius:8px;--season-pattern:repeating-linear-gradient(90deg,transparent 0 55px,rgba(187,214,244,.035) 55px 56px);color-scheme:dark;--shadow:0 9px 26px rgba(4,13,27,.28)}
+/* March — thawing earth and first shoots. */
+html[data-season="3"]{--season-page:#e8efdc;--season-card:#fcfdf7;--season-raised:#f0f5e8;--season-border:#b5cba6;--season-text:#2b4333;--season-muted:#586d58;--season-hero:#d9ebcb;--season-nav:#365d45;--season-primary:#3b6947;--season-action:#3b6947;--season-radius:18px;--season-pattern:repeating-linear-gradient(0deg,transparent 0 44px,rgba(84,134,81,.045) 44px 45px)}
+/* April — rain, wet stone, and new foliage. */
+html[data-season="4"]{--season-page:#dceae8;--season-card:#f7fbfa;--season-raised:#e7f3ef;--season-border:#a7c9c5;--season-text:#234642;--season-muted:#52736d;--season-hero:#c8e3dc;--season-nav:#245855;--season-primary:#286c64;--season-action:#286c64;--season-radius:15px;--season-pattern:repeating-linear-gradient(115deg,transparent 0 50px,rgba(59,131,132,.045) 50px 51px)}
+/* May — blossoms and warm light. */
+html[data-season="5"]{--season-page:#f2eddb;--season-card:#fffdf4;--season-raised:#f8f5e7;--season-border:#d6cda6;--season-text:#4a4930;--season-muted:#746b50;--season-hero:#e9e4bb;--season-nav:#626a39;--season-primary:#626b35;--season-action:#626b35;--season-radius:20px;--season-pattern:radial-gradient(circle at 14px 14px,rgba(202,146,134,.09) 0 2px,transparent 2.5px);background-size:56px 56px}
+/* June — high sky and lush grass. */
+html[data-season="6"]{--season-page:#e2f2e9;--season-card:#fbfefb;--season-raised:#edf8f1;--season-border:#a9d1ba;--season-text:#214836;--season-muted:#517160;--season-hero:#c9e9d8;--season-nav:#24634e;--season-primary:#256b52;--season-action:#256b52;--season-radius:17px;--season-pattern:repeating-linear-gradient(165deg,transparent 0 64px,rgba(72,151,102,.045) 64px 65px)}
+/* July — dry sunlight and mature greenery. */
+html[data-season="7"]{--season-page:#f2ead0;--season-card:#fffbee;--season-raised:#f8f0d8;--season-border:#d4bf7f;--season-text:#474526;--season-muted:#766b42;--season-hero:#ebdca7;--season-nav:#526b3e;--season-primary:#626134;--season-action:#626134;--season-radius:12px;--season-pattern:repeating-linear-gradient(90deg,transparent 0 72px,rgba(159,128,46,.05) 72px 73px)}
+/* August — honey and harvest. */
+html[data-season="8"]{--season-page:#f3e5cb;--season-card:#fffaf0;--season-raised:#faeed9;--season-border:#d8b991;--season-text:#513a25;--season-muted:#795e43;--season-hero:#edcf9f;--season-nav:#794b28;--season-primary:#815021;--season-action:#815021;--season-radius:14px;--season-pattern:repeating-linear-gradient(45deg,transparent 0 42px,rgba(171,112,54,.05) 42px 43px)}
+/* September — ochre leaves and cool air. */
+html[data-season="9"]{--season-page:#ece0d0;--season-card:#fff9f0;--season-raised:#f5eadd;--season-border:#ceb59a;--season-text:#4a382b;--season-muted:#756250;--season-hero:#e6c9a9;--season-nav:#65462f;--season-primary:#795131;--season-action:#795131;--season-radius:11px;--season-pattern:repeating-linear-gradient(130deg,transparent 0 58px,rgba(158,103,58,.05) 58px 59px)}
+/* October — rust, lanterns, and falling leaves. */
+html[data-season="10"]{--season-page:#eed9c9;--season-card:#fff7ed;--season-raised:#f8e8da;--season-border:#d3a98f;--season-text:#4f3029;--season-muted:#78564a;--season-hero:#e8bfa7;--season-nav:#743f32;--season-primary:#944a32;--season-action:#944a32;--season-radius:13px;--season-pattern:repeating-linear-gradient(40deg,transparent 0 44px,rgba(168,84,50,.055) 44px 45px)}
+/* November — cold graphite and low mist. */
+html[data-season="11"]{--season-page:#242e35;--season-card:#34424a;--season-raised:#41525b;--season-border:#637c87;--season-text:#f2f6f7;--season-muted:#c9d5da;--season-hero:#435762;--season-nav:#17262e;--season-primary:#d0e6ec;--season-action:#466777;--season-secondary:#e6cda7;--season-secondary-soft:#564c45;--season-danger:#ffbbb5;--season-danger-soft:#5c4648;--season-radius:7px;--season-pattern:repeating-linear-gradient(0deg,transparent 0 67px,rgba(198,217,222,.035) 67px 68px);color-scheme:dark;--shadow:0 8px 28px rgba(11,19,24,.27)}
+/* December — snowy firs and winter light. */
+html[data-season="12"]{--season-page:#dceff0;--season-card:#faffff;--season-raised:#e9f6f5;--season-border:#a3cdcc;--season-text:#204345;--season-muted:#527274;--season-hero:#c5e7e7;--season-nav:#1e5962;--season-primary:#23646d;--season-action:#23646d;--season-radius:16px;--season-pattern:repeating-linear-gradient(155deg,transparent 0 45px,rgba(71,146,157,.045) 45px 46px)}
+
+html[data-season],html[data-season] body{background-color:var(--season-page)!important;color:var(--season-text)}
+html[data-season] body{background-image:var(--season-pattern);background-attachment:fixed}
+html[data-season] .g-header,html[data-season] .mayor-heading{background:var(--season-nav)!important;color:var(--season-nav-text)!important;border-bottom:1px solid var(--season-border)}
+html[data-season] .bottom-nav,html[data-season] .sections-drawer-panel{background:var(--season-card)!important;color:var(--season-text)!important}
+html[data-season] .brand-lockup,html[data-season] .h-name,html[data-season] .h-notify,html[data-season] .header-links button{color:var(--season-nav-text)!important}
+html[data-season] .brand-lockup small,html[data-season] .h-job,html[data-season] .mayor-heading p,html[data-season] .mayor-eyebrow{color:var(--season-nav-text)!important;opacity:.82}
+html[data-season] .header-links button:hover{background:rgba(255,255,255,.14)}
+html[data-season] .h-bal{background:var(--season-card)!important;color:var(--season-text)!important}
+html[data-season] .card,html[data-season] .quick-card,html[data-season] .market-card,html[data-season] .cart-card,html[data-season] .order-card,html[data-season] .rent-card,html[data-season] .work-order,html[data-season] .lb-row,html[data-season] .notif-item,html[data-season] .stat-box,html[data-season] .status-card,html[data-season] .dm-user-row,html[data-season] .biz-card,html[data-season] .season-picker{background:var(--season-card)!important;color:var(--season-text)!important;border-color:var(--season-border)!important;border-radius:var(--season-radius)}
+html[data-season] .item-row,html[data-season] .cart-item,html[data-season] .order-item,html[data-season] .rent-row,html[data-season] .total-row,html[data-season] .biz-role-row,html[data-season] .taxi-info-box,html[data-season] .delivery-choice-box{background:var(--season-raised)!important;color:var(--season-text)!important;border-color:var(--season-border)!important}
+html[data-season] .home-hero,html[data-season] .mayor-overview-lead,html[data-season] .profile-header,html[data-season] .logo-card,html[data-season] .mayor-resident-card{background:var(--season-hero)!important;color:var(--season-text)!important;border-color:var(--season-border)!important;border-radius:var(--season-radius)}
+html[data-season] .home-hero .stat-box{background:var(--season-card)!important}
+html[data-season] .hero-role,html[data-season] .quick-card .qsub,html[data-season] .service-group-heading p{color:var(--season-muted)}
+html[data-season] .quick-card .qico,html[data-season] .bn-item.sel{background:var(--season-hero)!important;color:var(--season-primary)!important}
+html[data-season] .quick-card .qlbl,html[data-season] .service-group-heading h2{color:var(--season-text)!important}
+html[data-season] .mayor-tabs,html[data-season] .mayor-search{background:var(--season-raised);border-color:var(--season-border)}
+html[data-season] .mayor-tabs button,html[data-season] .mayor-queue-grid button,html[data-season] .mayor-resident-actions button,html[data-season] .sections-drawer-links button{color:var(--season-text);background:var(--season-card);border-color:var(--season-border)}
+html[data-season] .mayor-tabs button[aria-selected="true"]{background:var(--season-action);color:var(--season-action-text)}
+html[data-season] .mayor-heading .btn{background:var(--season-card)!important;color:var(--season-text)!important}
+html[data-season] input,html[data-season] textarea,html[data-season] select,html[data-season] select option{background:var(--season-field)!important;color:var(--season-text)!important;border-color:var(--season-border)!important}
+html[data-season="2"]{--season-field:#1c2a42}html[data-season="11"]{--season-field:#2a3a43}
+html[data-season] input::placeholder,html[data-season] textarea::placeholder{color:var(--season-muted)!important}
+html[data-season] .btn-primary,html[data-season] .msg-tab.active,html[data-season] .market-tab.active,html[data-season] .biz-tab.active,html[data-season] .news-tab.active{background:var(--season-action)!important;color:var(--season-action-text)!important;border-color:var(--season-action)!important}
+html[data-season] .btn-gold{background:var(--season-secondary-soft)!important;color:var(--season-text)!important;border:1px solid var(--season-secondary)!important}
+html[data-season] .btn-red{background:#a43b3b!important;color:#fff!important;border:1px solid #a43b3b!important}
+html[data-season] .btn-ghost,html[data-season] .msg-tab,html[data-season] .market-tab,html[data-season] .biz-tab,html[data-season] .news-tab,html[data-season] .msg-action-btn{background:var(--season-raised)!important;color:var(--season-text)!important;border-color:var(--season-border)!important}
+html[data-season] .chat-bubble,html[data-season] .chat-msg.me .chat-bubble{background:var(--season-raised)!important;color:var(--season-text)!important;border-color:var(--season-border)!important}
+html[data-season] .chat-msg.me .chat-bubble{border-left:3px solid var(--season-action)!important}
+html[data-season] .season-choice{background:var(--season-card);color:var(--season-text);border-color:var(--season-border)}
+html[data-season] .season-active,html[data-season] .mayor-queue-grid strong{background:var(--season-raised);color:var(--season-text)}
+html[data-season] .user-profile-sheet,html[data-season] .history-sheet{background:var(--season-card)!important;color:var(--season-text)!important}
+html[data-season] .news-badge-new,html[data-season] .news-scope-badge{background:var(--season-raised);color:var(--season-primary);border-color:var(--season-border)}
+html[data-season] .text-rainbow-prime{background:none!important;color:var(--season-primary)!important;-webkit-text-fill-color:var(--season-primary)!important;animation:none!important}
+html[data-season] .text-rainbow-prime+div{color:var(--season-text)!important}
+/* Explicit foregrounds for old overlays that used dark backgrounds and inherited light-theme ink. */
+html[data-season] .toast,html[data-season] #notifPopup{background:var(--season-nav)!important;color:var(--season-nav-text)!important;border-color:rgba(255,255,255,.28)!important}
+html[data-season] .toast span,html[data-season] #notifPopup .np-text{color:var(--season-nav-text)!important}
+html[data-season] #notifPopup .np-time,html[data-season] #notifPopup .np-close{color:var(--season-nav-text)!important;opacity:.85}
+html[data-season] .notif-item .notif-text{color:var(--season-text)!important}
+html[data-season] .notif-item .notif-time{color:var(--season-muted)!important}
+html[data-season] .terminal-overlay,html[data-season] .terminal-pay-anim{color:#fff}
+/* A small seasonal accent remains visible beyond the home page. */
+html[data-season] .page-wrap>.section:not(#home):not(#adminPage)::before{border-bottom:2px solid var(--season-action)}
+html[data-season] .service-group-heading{border-color:var(--season-border)}
+html[data-season] .bottom-nav{border-top:2px solid var(--season-action)}
+html[data-season] .bottom-nav .bn-item{color:var(--season-muted)}
+html[data-season] .bottom-nav .bn-item.sel,html[data-season] .bottom-nav .bn-item:hover{color:var(--season-text)!important}
+html[data-season] #notifPopup{top:calc(78px + env(safe-area-inset-top,0px))}
+html[data-season] .season-effects-toggle{position:fixed;right:clamp(12px,2vw,28px);bottom:calc(90px + env(safe-area-inset-bottom,0px));z-index:880;display:flex;align-items:center;gap:8px;min-height:42px;padding:8px 13px;border-radius:999px;background:var(--season-nav);color:var(--season-nav-text);border:1px solid var(--season-border);font:800 12px Nunito,Arial,sans-serif;box-shadow:var(--shadow);cursor:pointer}
+html[data-season] .season-effects-toggle svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+html[data-season] .season-effects-toggle[aria-pressed="false"]{background:var(--season-card);color:var(--season-text)}
+.season-effects-layer{position:fixed;inset:0;z-index:750;pointer-events:none;overflow:hidden;contain:paint}
+.season-particle{position:absolute;top:-8vh;left:var(--x);width:var(--size);height:var(--size);color:var(--particle-color);opacity:.65;animation:season-fall var(--duration) linear var(--delay) infinite;will-change:transform}
+.season-particle svg{display:block;width:100%;height:100%;fill:currentColor;stroke:currentColor;stroke-width:1.5}
+@keyframes season-fall{from{transform:translate3d(0,-10vh,0) rotate(0deg)}to{transform:translate3d(var(--drift),115vh,0) rotate(var(--rotate))}}
+@media(max-width:720px){html[data-season] .season-effects-toggle{bottom:calc(80px + env(safe-area-inset-bottom,0px));right:10px;padding:9px}.season-particle:nth-child(n+13){display:none}}
+@media(prefers-reduced-motion:reduce){.season-effects-layer{display:none!important}}
+.kapani-icon{display:inline-block;width:1.05em;height:1.05em;flex:none;vertical-align:-.15em;margin-inline-end:.22em;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+button:has(>.kapani-icon:only-child) .kapani-icon{margin-inline-end:0}
+.h-notify .kapani-icon{width:22px;height:22px;margin:0}

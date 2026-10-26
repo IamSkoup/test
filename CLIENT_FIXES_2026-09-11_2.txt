@@ -1,0 +1,10 @@
+Kapani client fixes — 2026-09-11 (second pass)
+
+- Business upgrades: quantity total, current balance, payment confirmation, canonical limitBonus keys.
+- Business owner: clear all complaints/requests; clear job applications.
+- Business map: default base point 52.628733, 38.416604; robust Save Point handling; hybrid imagery/reference overlay.
+- Taxi and business maps: hybrid satellite + roads/place reference layers.
+- Delivery marketplace selection summary updates immediately on select change.
+- Push enqueue wake-up: no noisy protected-session error when Firebase Auth is not ready; durable RTDB queue remains authoritative.
+- Taxi/shop worker notifications: query only relevant jobs instead of reading the whole users tree.
+- Delivery flow remains transaction-protected for marketplace purchase, driver offer/acceptance and two-sided payout.

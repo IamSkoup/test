@@ -1,0 +1,395 @@
+/* Kapani Forest — depth, subscription identities and personalized nature skins.
+ * Loaded after every legacy and seasonal stylesheet to restore customization.
+ */
+:root, html[data-season] {
+  --kp-fern: #9fcca5;
+  --kp-emerald: #45a887;
+  --kp-honey: #e7c881;
+  --kp-dusk: #829fb8;
+  --kp-forest-shadow: 0 18px 46px rgba(0, 0, 0, .24);
+}
+
+/* A layered forest atmosphere instead of a flat green sheet. */
+html[data-season] body {
+  background-color: #081912 !important;
+  background-image:
+    radial-gradient(ellipse at 14% 8%, rgba(53, 117, 73, .22), transparent 39%),
+    radial-gradient(ellipse at 95% 66%, rgba(60, 119, 103, .18), transparent 42%),
+    linear-gradient(114deg, rgba(4, 18, 13, .95), rgba(6, 23, 17, .88) 57%, rgba(8, 28, 21, .8)),
+    url('./forest-road.webp') !important;
+  background-position: center;
+  background-size: cover;
+}
+html[data-season] .card, html[data-season] .status-card,
+html[data-season] .stat-box, html[data-season] .market-card,
+html[data-season] .work-order {
+  background: linear-gradient(142deg, rgba(23, 57, 40, .98), rgba(11, 35, 26, .97) 61%, rgba(15, 45, 34, .94)) !important;
+  border-color: rgba(163, 205, 158, .21) !important;
+}
+html[data-season] .card-title { color: #d3e6bf !important; }
+html[data-season] .g-header {
+  background: linear-gradient(110deg, rgba(11, 42, 29, .97), rgba(15, 56, 38, .97), rgba(7, 31, 23, .98)) !important;
+  box-shadow: 0 14px 37px rgba(1, 9, 5, .18);
+}
+html[data-season] .bottom-nav {
+  background: linear-gradient(160deg, rgba(11, 41, 28, .98), rgba(7, 27, 21, .98)) !important;
+}
+html[data-season] .bottom-nav .bn-item.sel,
+html[data-season] .bottom-nav .bn-item:hover {
+  background: linear-gradient(125deg, rgba(98, 158, 102, .27), rgba(38, 92, 72, .24)) !important;
+}
+html[data-season] .btn-primary, html[data-season] .btn-primary:hover {
+  background: linear-gradient(120deg, #3e8258 0%, #286e57 56%, #418f70 100%) !important;
+  color: #f7fff5 !important;
+  border-color: rgba(153, 210, 157, .4) !important;
+  box-shadow: inset 0 1px rgba(236, 255, 230, .1), 0 7px 22px rgba(23, 84, 48, .22);
+}
+html[data-season] .btn-gold {
+  background: linear-gradient(120deg, #695734, #8c7445, #5b5239) !important;
+  border-color: #a89363 !important;
+  color: #fff0ca !important;
+}
+html[data-season] .btn-ghost { background: linear-gradient(145deg, #224633, #153327) !important; }
+html[data-season] .h-bal { background: linear-gradient(120deg, #255439, #193e31) !important; }
+html[data-season] .item-row, html[data-season] .cart-item,
+html[data-season] .order-item, html[data-season] .rent-row,
+html[data-season] .total-row { background: linear-gradient(110deg, rgba(30, 62, 44, .91), rgba(17, 45, 33, .95)) !important; }
+#home .service-group:not(:first-child) .quick-card {
+  background: linear-gradient(130deg, rgba(28, 69, 46, .98), rgba(15, 46, 34, .97) 75%, rgba(21, 58, 43, .98)) !important;
+}
+#home .home-help-row, html[data-season] .home-map-details {
+  background: linear-gradient(115deg, rgba(19, 52, 35, .96), rgba(11, 38, 28, .94)) !important;
+}
+html[data-season] .mayor-heading, html[data-season] .mayor-overview-lead {
+  background: linear-gradient(119deg, #153a28, #2e6543 58%, #173d30) !important;
+}
+
+/* Three subscriptions are visually related to the forest but distinct. */
+#subscription.active {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 17px;
+  align-items: stretch;
+}
+#subscription > .card { min-width: 0; margin: 0; }
+#subscription > .card:not(.subscription-plan) { grid-column: 1 / -1; }
+#subscription > .card:nth-child(2), #subscription > .card:nth-child(3) { grid-column: span 3; }
+#subscription > .subscription-plan { grid-column: span 2; }
+html[data-season] #subscription .subscription-plan {
+  --plan-accent: #d7cd91;
+  display:flex;
+  flex-direction:column;
+  position:relative;
+  isolation:isolate;
+  overflow:hidden;
+  padding:clamp(18px, 2vw, 27px);
+  border: 1px solid color-mix(in srgb, var(--plan-accent) 45%, transparent) !important;
+  border-radius:18px;
+  box-shadow: var(--kp-forest-shadow), inset 0 1px rgba(255,255,255,.06) !important;
+  transition:transform .2s ease, box-shadow .2s ease;
+}
+html[data-season] #subscription .subscription-plan:hover { transform:translateY(-3px); }
+html[data-season] #subscription .plan-plus {
+  --plan-accent:#e5d394;
+  background:radial-gradient(circle at 100% 0%,rgba(209,184,106,.22),transparent 46%),
+    linear-gradient(145deg,#31432b,#203b30 50%,#122d24) !important;
+}
+html[data-season] #subscription .plan-ultra {
+  --plan-accent:#79dfc0;
+  background:radial-gradient(circle at 93% 0%,rgba(86,224,190,.22),transparent 46%),
+    linear-gradient(145deg,#153f39,#145047 51%,#102c30) !important;
+}
+html[data-season] #subscription .plan-prime {
+  --plan-accent:#f2d29d;
+  background-image:radial-gradient(circle at 93% 1%,rgba(222,187,120,.23),transparent 40%),
+    radial-gradient(circle at 0% 92%,rgba(105,186,166,.23),transparent 52%),
+    linear-gradient(115deg,#273c32,#24493d,#29394c,#4c4535,#273c32) !important;
+  background-size:100% 100%,100% 100%,350% 100% !important;
+  animation:kapaniPrimeGlide 11s ease-in-out infinite;
+  border-color:rgba(220,202,148,.67) !important;
+  box-shadow:0 15px 45px rgba(15, 53, 43, .3),0 0 33px rgba(163, 180, 127, .12),inset 0 1px rgba(255,255,255,.14) !important;
+}
+html[data-season] #subscription .subscription-plan > div:first-child > div:nth-child(2) > div:first-child,
+html[data-season] #subscription .subscription-plan > div:first-child > div:nth-child(2) > div:nth-child(2) {
+  color:var(--plan-accent) !important;
+}
+html[data-season] #subscription .subscription-plan > div:nth-child(3) { flex:1 1 auto; }
+.subscription-skin-hint {
+  padding:9px 12px;margin:0 0 17px;border-radius:10px;
+  background:linear-gradient(100deg,color-mix(in srgb,var(--plan-accent) 14%,transparent),rgba(9,31,24,.18));
+  border:1px solid color-mix(in srgb,var(--plan-accent) 23%,transparent);
+  color:#e3edda;font-size:11px;font-weight:800;line-height:1.45;
+}
+html[data-season] #subscription .subscription-plan > div.subscription-skin-hint {flex:0 0 auto;}
+html[data-season] #subscription .subscription-plan > button[id^="btnBuy"] {
+  margin-top:auto;
+  min-height:47px;
+  width:100%;
+  background:linear-gradient(120deg,color-mix(in srgb,var(--plan-accent) 43%,#163a2d),color-mix(in srgb,var(--plan-accent) 26%,#183b30)) !important;
+  border-color:color-mix(in srgb,var(--plan-accent) 45%,transparent) !important;
+  color:#f8fff0 !important;
+}
+html[data-season] #subscription .plan-plus > button[id^="btnBuy"] { color:#fff6db !important; }
+html[data-season] #subscription .plan-prime > button[id^="btnBuy"] {
+  background:linear-gradient(120deg,#967f51,#507c6c,#657ea0,#a48958) !important;
+  background-size:300% 100% !important;
+  animation:kapaniPrimeGlide 8s linear infinite;
+  color:#fffbea !important;
+}
+.sub-badge-plus {
+  background:linear-gradient(125deg,#8b794d,#d8c68c,#7d8d53) !important;
+  color:#17261b !important;
+  border:1px solid rgba(255,235,160,.37);
+}
+.sub-badge-ultra {
+  background:linear-gradient(125deg,#297365,#71cab1,#408f91) !important;
+  color:#082d29 !important;
+  border:1px solid rgba(150,234,199,.49);
+}
+.sub-badge-prime {
+  background:linear-gradient(120deg,rgba(213,179,120,.24),rgba(71,133,115,.3),rgba(106,130,166,.26)) !important;
+  border:1px solid rgba(232,212,162,.48) !important;
+  color:#f4e0b4 !important;
+}
+.text-rainbow-prime {
+  background:linear-gradient(90deg,#f0d49f,#9ad7bb,#93c5dd,#c4c5e3,#ddc393,#f0d49f) !important;
+  background-size:300% 100% !important;
+  background-clip:text !important;
+  -webkit-background-clip:text !important;
+  color:transparent !important;
+  -webkit-text-fill-color:transparent !important;
+  animation:kapaniPrimeGlide 8s linear infinite !important;
+}
+@keyframes kapaniPrimeGlide {
+  0% { background-position:0% 50%; }
+  50% { background-position:100% 50%; }
+  100% { background-position:0% 50%; }
+}
+
+/* Restore every pre-existing custom wall skin, previously flattened by seasons. */
+html[data-season] #profileHeaderBg:not([class*="profile-bg-"]) {
+  background:linear-gradient(145deg,#1a4230,#0e2b22) !important;
+}
+html[data-season] [class*="profile-bg-"] {
+  background:var(--kp-profile-skin) !important;
+  color:#f3f6ee;
+}
+.profile-bg-shimmer { --kp-profile-skin:linear-gradient(95deg,#183b2c,#315a45,#789066,#183b2c); }
+.profile-bg-particles { --kp-profile-skin:radial-gradient(circle at 90% 5%,rgba(150,210,157,.3),transparent 50%),linear-gradient(135deg,#163728,#163f34); }
+.profile-bg-gradient-animated { --kp-profile-skin:linear-gradient(125deg,#103d35,#345a56,#416a51,#1d3d47);background-size:350% 350% !important; }
+.profile-bg-ocean { --kp-profile-skin:linear-gradient(135deg,#103b48,#26697a,#12342f); }
+.profile-bg-sunset { --kp-profile-skin:linear-gradient(135deg,#754e46,#a77b4e,#284b40); }
+.profile-bg-aurora { --kp-profile-skin:linear-gradient(120deg,#0d3e36,#287b69,#344a87,#244b51); }
+.profile-bg-galaxy { --kp-profile-skin:linear-gradient(145deg,#151d39,#424d6f,#192e42); }
+.profile-bg-fire { --kp-profile-skin:linear-gradient(145deg,#633c2e,#ae7545,#283e30); }
+.profile-bg-plasma { --kp-profile-skin:linear-gradient(145deg,#473361,#765a94,#273e51); }
+.profile-bg-thunder { --kp-profile-skin:linear-gradient(145deg,#504c2e,#a6a067,#253c37); }
+.profile-bg-hologram { --kp-profile-skin:linear-gradient(145deg,#1b4d56,#3c8090,#415c76); }
+.profile-bg-dragon { --kp-profile-skin:linear-gradient(145deg,#4d3031,#9a563e,#2b4439); }
+.profile-bg-prime {
+  --kp-profile-skin:linear-gradient(120deg,#264c42,#8a7959,#416d7e,#60748b,#37664d,#264c42);
+  background-size:350% 100% !important;
+  animation:kapaniPrimeGlide 10s ease-in-out infinite !important;
+}
+
+/* Six new coherent wall designs, shared with private and public profiles. */
+.profile-bg-forest-moss {
+  --kp-profile-skin:linear-gradient(110deg,rgba(8,29,17,.92),rgba(23,65,35,.74)),url('./forest-road.webp') center/cover;
+}
+.profile-bg-forest-dusk {
+  --kp-profile-skin:linear-gradient(125deg,rgba(15,31,43,.9),rgba(19,64,53,.68),rgba(22,40,51,.93)),url('./forest-road.webp') center/cover;
+}
+.profile-bg-nature-meadow {
+  --kp-profile-skin:linear-gradient(125deg,rgba(13,43,25,.7),rgba(42,80,49,.36)),url('./forest-meadow.webp') center/cover;
+}
+.profile-bg-nature-aurora {
+  --kp-profile-skin:linear-gradient(120deg,rgba(11,41,43,.69),rgba(26,69,59,.28)),url('./forest-aurora.webp') center/cover;
+}
+.profile-bg-wild-ember {
+  --kp-profile-skin:linear-gradient(120deg,rgba(35,29,19,.67),rgba(81,49,21,.32)),url('./forest-ember.webp') center/cover;
+}
+.profile-bg-wild-storm {
+  --kp-profile-skin:linear-gradient(120deg,rgba(9,27,35,.68),rgba(23,45,52,.29)),url('./forest-storm.webp') center/cover;
+}
+html[data-season] .profile-bg-prime,
+html[data-season] .profile-bg-gradient-animated {
+  background-size:320% 100% !important;
+}
+
+/* The frame div is on top of an image. Its CENTER must be transparent: the
+ * gradient belongs to a masked border-only pseudo-element, never the div. */
+html[data-season] .avatar-frame-forest-moss,
+html[data-season] .avatar-frame-forest-dusk,
+html[data-season] .avatar-frame-nature-meadow,
+html[data-season] .avatar-frame-nature-aurora,
+html[data-season] .avatar-frame-wild-ember,
+html[data-season] .avatar-frame-wild-storm {
+  border:3px solid var(--kp-frame-base) !important;
+  background:none !important;
+  box-shadow:0 0 12px var(--kp-frame-glow) !important;
+}
+html[data-season] .avatar-frame-forest-moss::before,
+html[data-season] .avatar-frame-forest-dusk::before,
+html[data-season] .avatar-frame-nature-meadow::before,
+html[data-season] .avatar-frame-nature-aurora::before,
+html[data-season] .avatar-frame-wild-ember::before,
+html[data-season] .avatar-frame-wild-storm::before {
+  content:'';
+  position:absolute;
+  inset:-3px;
+  border:3px solid transparent;
+  border-radius:inherit;
+  background:var(--kp-frame-skin) border-box;
+  -webkit-mask:linear-gradient(#fff 0 0) padding-box,linear-gradient(#fff 0 0);
+  -webkit-mask-composite:xor;
+  mask:linear-gradient(#fff 0 0) padding-box,linear-gradient(#fff 0 0);
+  mask-composite:exclude;
+  pointer-events:none;
+}
+.avatar-frame-forest-moss { --kp-frame-skin:linear-gradient(135deg,#bfd9a8,#4f965d,#304d33,#d3ddae);--kp-frame-base:#76b982;--kp-frame-glow:rgba(126,191,112,.37); }
+.avatar-frame-forest-dusk { --kp-frame-skin:linear-gradient(135deg,#a5d0c1,#426d78,#62738e,#b4dac8);--kp-frame-base:#7eb5b0;--kp-frame-glow:rgba(96,155,152,.4); }
+.avatar-frame-nature-meadow { --kp-frame-skin:linear-gradient(135deg,#ece6a9,#a6d5a1,#4da68a,#e2deb0);--kp-frame-base:#b8d99e;--kp-frame-glow:rgba(173,212,121,.4); }
+.avatar-frame-nature-aurora { --kp-frame-skin:linear-gradient(135deg,#91efce,#649dbd,#abcebd,#d6e6b6);--kp-frame-base:#83c9bb;--kp-frame-glow:rgba(116,198,196,.43); }
+.avatar-frame-wild-ember { --kp-frame-skin:linear-gradient(135deg,#f0c083,#b96b49,#517d52,#e1a56d);--kp-frame-base:#db9e67;--kp-frame-glow:rgba(225,138,84,.45); }
+.avatar-frame-wild-storm {
+  --kp-frame-skin:linear-gradient(120deg,#e2c990,#70afaa,#7397ba,#d7ae78,#e2c990);
+  --kp-frame-base:#8fbbb5;
+  --kp-frame-glow:rgba(141,202,178,.52);
+}
+html[data-season] .avatar-frame-wild-storm::before {
+  background-size:300% 100%;
+  animation:kapaniPrimeGlide 7s linear infinite;
+}
+html[data-season] .profile-bg-custom { --kp-profile-skin:linear-gradient(130deg,#103f30,#225a4e); }
+html[data-season] .avatar-frame-prime {
+  border:4px solid transparent !important;
+  background:linear-gradient(120deg,#ecd39c,#85d1b9,#91bcd4,#dfbd81,#ecd39c) border-box !important;
+  background-size:300% 100% !important;
+  animation:kapaniPrimeGlide 7s linear infinite !important;
+  box-shadow:0 0 18px rgba(177,220,181,.35);
+}
+
+/* Specificity beats the former blanket seasonal bubble background rule. */
+html[data-season] .chat-msg .chat-bubble[class*="chat-bubble-"],
+html[data-season] .chat-msg.me .chat-bubble[class*="chat-bubble-"],
+html[data-season] #kapaniPreviewChat[class*="chat-bubble-"] {
+  background:var(--kp-bubble-skin) !important;
+  border-color:var(--kp-bubble-border,rgba(160,210,173,.4)) !important;
+  box-shadow:0 5px 17px var(--kp-bubble-glow,rgba(0,0,0,.12)) !important;
+  color:#f9fbf5 !important;
+}
+html[data-season] .chat-msg.me .chat-bubble:not([class*="chat-bubble-"]) {
+  background:linear-gradient(130deg,#285c43,#1a4636) !important;
+  border-color:rgba(151,214,163,.35) !important;
+  color:#f2f8ec !important;
+}
+.chat-bubble-gold { --kp-bubble-skin:linear-gradient(135deg,#695b3a,#977c4b);--kp-bubble-border:#bea269;--kp-bubble-glow:rgba(174,140,74,.25); }
+.chat-bubble-rainbow { --kp-bubble-skin:linear-gradient(120deg,#6c566b,#466988,#567e67,#866b51);--kp-bubble-border:#aea3b7;--kp-bubble-glow:rgba(148,133,188,.25); }
+.chat-bubble-ocean { --kp-bubble-skin:linear-gradient(120deg,#164d60,#236c7b);--kp-bubble-border:#6bb5c4;--kp-bubble-glow:rgba(66,162,194,.25); }
+.chat-bubble-sunset { --kp-bubble-skin:linear-gradient(120deg,#834b49,#a57751);--kp-bubble-border:#d5a578;--kp-bubble-glow:rgba(206,125,91,.26); }
+.chat-bubble-aurora { --kp-bubble-skin:linear-gradient(120deg,#1a6659,#415c85);--kp-bubble-border:#82c7ae;--kp-bubble-glow:rgba(105,180,157,.24); }
+.chat-bubble-galaxy { --kp-bubble-skin:linear-gradient(120deg,#242e56,#495477);--kp-bubble-border:#9ea3d9;--kp-bubble-glow:rgba(122,134,201,.26); }
+.chat-bubble-fire { --kp-bubble-skin:linear-gradient(120deg,#6b3332,#a26a3e);--kp-bubble-border:#da9065;--kp-bubble-glow:rgba(211,121,80,.3); }
+.chat-bubble-neon { --kp-bubble-skin:linear-gradient(120deg,#164c59,#255b78);--kp-bubble-border:#72c9d3;--kp-bubble-glow:rgba(95,199,211,.28); }
+.chat-bubble-rose { --kp-bubble-skin:linear-gradient(120deg,#633e58,#895b73);--kp-bubble-border:#d299bc;--kp-bubble-glow:rgba(192,128,173,.26); }
+.chat-bubble-plasma { --kp-bubble-skin:linear-gradient(120deg,#493c70,#715d90);--kp-bubble-border:#b9a5d3;--kp-bubble-glow:rgba(157,112,203,.28); }
+.chat-bubble-thunder { --kp-bubble-skin:linear-gradient(120deg,#55583e,#72764c);--kp-bubble-border:#d6cb82;--kp-bubble-glow:rgba(199,187,90,.29); }
+.chat-bubble-hologram { --kp-bubble-skin:linear-gradient(120deg,#245a6b,#557d91);--kp-bubble-border:#9aced2;--kp-bubble-glow:rgba(125,197,215,.3); }
+.chat-bubble-dragon { --kp-bubble-skin:linear-gradient(120deg,#604039,#855b3d);--kp-bubble-border:#c9966b;--kp-bubble-glow:rgba(186,128,71,.26); }
+.chat-bubble-prime {
+  --kp-bubble-skin:linear-gradient(120deg,#6f6648,#2b6f64,#526d8d,#7f674d,#6f6648);
+  --kp-bubble-border:#e2cfa3;
+  --kp-bubble-glow:rgba(153,205,178,.36);
+  background-size:320% 100% !important;
+  animation:kapaniPrimeGlide 8s linear infinite !important;
+}
+.chat-bubble-forest-moss { --kp-bubble-skin:linear-gradient(125deg,#214f31,#42724b,#1a4332);--kp-bubble-border:#93bc83;--kp-bubble-glow:rgba(108,165,101,.24); }
+.chat-bubble-forest-dusk { --kp-bubble-skin:linear-gradient(125deg,#1a464a,#426874,#243b56);--kp-bubble-border:#83b4ac;--kp-bubble-glow:rgba(89,152,150,.29); }
+.chat-bubble-nature-meadow { --kp-bubble-skin:linear-gradient(125deg,#376c45,#6b8b54,#315e51);--kp-bubble-border:#b5d7a3;--kp-bubble-glow:rgba(150,199,110,.24); }
+.chat-bubble-nature-aurora { --kp-bubble-skin:linear-gradient(125deg,#236b64,#4d8990,#306074);--kp-bubble-border:#a3e0ca;--kp-bubble-glow:rgba(112,193,196,.29); }
+.chat-bubble-wild-ember { --kp-bubble-skin:linear-gradient(125deg,#655439,#a67448,#486b52);--kp-bubble-border:#d5b27f;--kp-bubble-glow:rgba(199,142,76,.33); }
+.chat-bubble-wild-storm {
+  --kp-bubble-skin:linear-gradient(120deg,#245c61,#797e6b,#a18761,#567d8c,#245c61);
+  --kp-bubble-border:#d8c79f;
+  --kp-bubble-glow:rgba(136,188,193,.35);
+  background-size:320% 100% !important;
+  animation:kapaniPrimeGlide 9s linear infinite !important;
+}
+html[data-season] .chat-msg .chat-bubble.chat-bubble-prime,
+html[data-season] .chat-msg .chat-bubble.chat-bubble-wild-storm,
+html[data-season] #kapaniPreviewChat.chat-bubble-prime,
+html[data-season] #kapaniPreviewChat.chat-bubble-wild-storm {
+  background-size:320% 100% !important;
+}
+
+/* Interactive customization preview, not an empty selector menu. */
+.kapani-customizer-sheet {
+  background:linear-gradient(145deg,#143b2b,#0a241c) !important;
+  border:1px solid rgba(183,219,173,.3);
+  box-shadow:0 22px 70px rgba(0,0,0,.45);
+  color:#f3f7ee;
+}
+.kapani-skin-preview {
+  display:flex;align-items:center;gap:14px;margin:4px 0 22px;
+  padding:12px;border:1px solid rgba(173,212,169,.2);
+  background:linear-gradient(120deg,#102e23,#193f2e);border-radius:13px;
+}
+.kapani-preview-avatar {
+  flex:0 0 54px;width:54px;height:54px;position:relative;
+  display:grid;place-items:center;border-radius:15px;
+  background:linear-gradient(130deg,#3f7855,#204b39);
+  font:700 25px Georgia,serif;color:#f7f6e7;
+}
+.kapani-preview-avatar .avatar-frame {position:absolute;inset:-3px;border-radius:inherit;pointer-events:none;}
+.kapani-preview-profile {min-width:0;flex:1;padding:12px;border-radius:11px;display:flex;flex-direction:column;align-items:flex-start;gap:7px;isolation:isolate;position:relative;overflow:hidden;background:linear-gradient(140deg,#1d4935,#113126);}
+.kapani-preview-profile > strong {font-size:12px;color:#f3f8ed;}
+html[data-season] #kapaniPreviewChat { max-width:100%;font-size:12px;min-width:0; }
+
+/* Small screens: all panels stay inside the viewport, including the editor. */
+@media (max-width:1050px) {
+  #subscription.active {grid-template-columns:repeat(2,minmax(0,1fr));}
+  #subscription > .card:not(.subscription-plan) {grid-column:1/-1;}
+  #subscription > .subscription-plan {grid-column:span 1;}
+  #subscription > .card:nth-child(2), #subscription > .card:nth-child(3) {grid-column:span 1;}
+  #subscription > .plan-prime {grid-column:1/-1;}
+}
+@media (max-width:760px) {
+  html, body { max-width:100%;overflow-x:clip; }
+  html[data-season] body {background-attachment:scroll !important;}
+  .container,.page-wrap,.page-wrap > .section,.card { min-width:0;max-width:100%;box-sizing:border-box; }
+  .page-wrap {padding-left:max(9px,env(safe-area-inset-left,0px));padding-right:max(9px,env(safe-area-inset-right,0px));}
+  #subscription.active {grid-template-columns:minmax(0,1fr);gap:13px;}
+  #subscription > .subscription-plan,#subscription > .card:nth-child(2),
+  #subscription > .card:nth-child(3),#subscription > .plan-prime {grid-column:1/-1;}
+  #subscription > .subscription-plan {padding:20px;}
+  #subscription .subscription-plan > div:nth-child(3) {font-size:12px !important;}
+  #bank.active,#jobs.active,#profile.active {grid-template-columns:minmax(0,1fr);}
+  #home .service-catalog,#home .service-group:first-child .service-tiles {grid-template-columns:minmax(0,1fr);}
+  #bottomNav {max-width:100vw;box-sizing:border-box;}
+  #bottomNav .bn-item {min-width:0;white-space:normal;}
+  .mayor-tabs {max-width:100%;}
+  .mayor-overview {grid-template-columns:minmax(0,1fr);}
+  .chat-msg,.chat-msg-body {max-width:100%;min-width:0;}
+  .chat-bubble {max-width:min(78vw,100%);overflow-wrap:anywhere;}
+  .chat-input-row {min-width:0;max-width:100%;}
+  .chat-input-row input {min-width:0;flex:1 1 0;}
+  .user-profile-sheet,.history-sheet {max-width:calc(100vw - 18px);box-sizing:border-box;}
+  .kapani-customizer-sheet {max-height:calc(100dvh - env(safe-area-inset-top,0px) - 18px) !important;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px)) !important;}
+}
+@media (max-width:390px) {
+  #home .service-tiles {grid-template-columns:minmax(0,1fr);}
+  .g-header {padding-left:8px;padding-right:8px;}
+  .h-bal {font-size:10px;padding:8px 6px;}
+  #bottomNav .bn-item {font-size:9px;padding-inline:2px;}
+  .kapani-skin-preview {gap:10px;padding:10px;}
+  .kapani-preview-avatar {flex-basis:44px;width:44px;height:44px;}
+  .kapani-customizer-sheet {padding-left:13px !important;padding-right:13px !important;}
+}
+@media (prefers-reduced-motion:reduce) {
+  #subscription .plan-prime, #subscription .plan-prime > button[id^="btnBuy"],
+  .text-rainbow-prime,.profile-bg-prime,.profile-bg-nature-aurora,.profile-bg-wild-storm,
+  .chat-bubble-prime,.chat-bubble-wild-storm,.avatar-frame-prime,.avatar-frame-wild-storm {
+    animation:none !important;
+  }
+  #subscription .subscription-plan {transition:none;}
+}

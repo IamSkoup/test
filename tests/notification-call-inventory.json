@@ -1,0 +1,446 @@
+[
+  {
+    "line": 3063,
+    "code": "// Single-flight lock: several callers (e.g. several pushNotification() calls"
+  },
+  {
+    "line": 3649,
+    "code": "if(opts.notify !== false) await pushNotification(nick, `🏪 Списано ${fee}₽ за ${weeks} нед. наличия бизнеса «${b.name}»`, 'money');"
+  },
+  {
+    "line": 3673,
+    "code": "await pushNotification(nick, `📈 Накопительный счёт: +${interest}₽ за ${days} дн.`, 'money');"
+  },
+  {
+    "line": 3757,
+    "code": "await pushNotification(nick, `💳 Списано за ${weeksApplied} нед.: ${parts.join(' + ')}. Налог считается с основного + накопительного счёта и списывается только с основного.`, 'money');"
+  },
+  {
+    "line": 3992,
+    "code": "await pushNotification(nick, `📢 Зарплата рекламщика: +${row.payout.toLocaleString('ru-RU')} ₽ за неделю ${row.week}. Приглашено: ${row.count}`, 'money');"
+  },
+  {
+    "line": 3994,
+    "code": "await pushNotification(nick, `📢 Итог недели ${row.week}: приглашено ${row.count}. Нужно минимум 4 — зарплата за эту неделю не начислена.`, 'system');"
+  },
+  {
+    "line": 4082,
+    "code": "try { await pushNotification(ADMIN, `💰 Из казны мэрии выведено ${amount.toLocaleString('ru-RU')} ₽ на ваш аккаунт`, 'money'); } catch(notifErr){ console.warn('[municipalTreasury notification]',notifErr); }"
+  },
+  {
+    "line": 5335,
+    "code": "// Notifications are always best-effort: pushNotification() must NEVER throw,"
+  },
+  {
+    "line": 5369,
+    "code": "async function pushNotification(nick,text,cat='system',extra={}){"
+  },
+  {
+    "line": 5386,
+    "code": "const result = await pushNotification(currentNick, '🧪 Тестовое уведомление Капани. Если вы видите это в списке и во всплывающем окне — уведомления работают.', 'system');"
+  },
+  {
+    "line": 5419,
+    "code": "return pushNotification(targetNick,payload.text||'Новое приглашение','messages',{notificationId:id,type:payload.type,duelId:payload.duelId,from:payload.from,source:'duel',sourceMessageId:payload.duelId});"
+  },
+  {
+    "line": 6397,
+    "code": "await pushNotification(currentNick,`📦 Заказ: ${items} — ${finalTotal}₽${discountPercent > 0 ? ` (скидка ${discountPercent}%)` : ''} (вкл. доставка 30₽)`);"
+  },
+  {
+    "line": 6401,
+    "code": "await Promise.all(Object.keys(workers).filter(nick=>nick!==currentNick).map(nick=>pushNotification(nick,`📦 Новый заказ: ${items} → ${escHtml(addr)} — ${finalTotal}₽`,'delivery_orders')));"
+  },
+  {
+    "line": 6506,
+    "code": "await pushNotification(currentNick,`🛵 Такси: ${from} → ${to} — ${priceText}`,'taxi_orders');"
+  },
+  {
+    "line": 6527,
+    "code": "const result = await pushNotification("
+  },
+  {
+    "line": 6577,
+    "code": "await pushNotification(o.client,notifText,o.type==='taxi'?'taxi_orders':'delivery_orders');"
+  },
+  {
+    "line": 6597,
+    "code": "await pushNotification(currentNick,`⚠️ Отказались от заказа. Штраф: ${result.penalty}₽`);"
+  },
+  {
+    "line": 6598,
+    "code": "await pushNotification(o.client,`⚠️ Исполнитель отказался. Ищем новый...`);"
+  },
+  {
+    "line": 6706,
+    "code": "await pushNotification(o.client,`💸 Оплата ${o.price}₽ → ${o.worker}`);await pushNotification(o.worker,`💰 Получено ${o.price}₽ от ${o.client}!`);"
+  },
+  {
+    "line": 6730,
+    "code": "await pushNotification(currentNick,`❌ Заказ отменён, штраф ${result.penalty}₽`);"
+  },
+  {
+    "line": 6731,
+    "code": "if(o.worker)await pushNotification(o.worker,`⚠️ ${currentNick} отменил заказ`);"
+  },
+  {
+    "line": 6998,
+    "code": "await pushNotification(to,`💰 Перевод ${amt}₽ от ${displayNick(fromUser)}`,'money');"
+  },
+  {
+    "line": 7009,
+    "code": "await pushNotification(to,`💰 Перевод ${amt}₽ от ${displayNick(fromUser)}`,'money');"
+  },
+  {
+    "line": 7128,
+    "code": "await pushNotification(ADMIN, `💵 Новая заявка банкомата от ${req.clientName}`, 'system');"
+  },
+  {
+    "line": 8010,
+    "code": "await pushNotification(currentNick, `🎁 +${safeReward}₽ на счёт заданий!`, 'money');"
+  },
+  {
+    "line": 8069,
+    "code": "await pushNotification(currentNick,`💰 ${amount}₽ переведено со счёта заданий на основной баланс`,'money');"
+  },
+  {
+    "line": 8470,
+    "code": "await pushNotification(l.seller,`🤝 Купить хочет: ${currentNick} · \"${l.title}\" · ${pl}`,'market');"
+  },
+  {
+    "line": 8473,
+    "code": "window.confirmMeeting=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();await update(listingRef(id),{status:'meeting_confirmed'});await pushNotification(l.buyer,`✅ ${l.seller} подтвердил встречу!`,'market');toast('✅ Встреча подтверждена','green');};"
+  },
+  {
+    "line": 8474,
+    "code": "window.cancelMeeting=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();const otherNick=l.buyer===currentNick?l.seller:l.buyer;await update(listingRef(id),{status:'active',buyer:null});if(otherNick)await pushNotification(otherNick,`⚠️ ${currentNick} отказался от сделки`,'market');toast('❌ Отказ от встречи','red');};"
+  },
+  {
+    "line": 8476,
+    "code": "window.declineListing=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();await update(listingRef(id),{status:'active',buyer:null});await pushNotification(l.buyer,`❌ ${l.seller} отказал`,'market');toast('❌ Отклонено','red');};"
+  },
+  {
+    "line": 8483,
+    "code": "await pushNotification(l.seller,`🧑‍💼 ${currentNick} подтвердил вакансию «${l.title}»`,'market');"
+  },
+  {
+    "line": 8504,
+    "code": "await pushNotification(l.buyer,'🎁 +90 ₽ на счёт заданий за покупку на маркетплейсе','money');"
+  },
+  {
+    "line": 8510,
+    "code": "await pushNotification(l.seller,`💰 ${l.buyer} заказал услугу \"${l.title}\"${pay?` — ${pay}₽`:''}${fee?` (+${fee}₽ комиссия)`:''}`,'market');"
+  },
+  {
+    "line": 8511,
+    "code": "await pushNotification(l.buyer,`✅ Услуга \"${l.title}\" подтверждена! Комиссия: ${fee}₽`,'market');"
+  },
+  {
+    "line": 8515,
+    "code": "await pushNotification(l.seller,`💰 ${l.buyer} купил \"${l.title}\"${pay?` — ${pay}₽`:''}${fee?` (+${fee}₽ комиссия)`:''}`,'market');"
+  },
+  {
+    "line": 8516,
+    "code": "await pushNotification(l.buyer,`✅ Покупка \"${l.title}\" подтверждена! Комиссия: ${fee}₽`,'market');"
+  },
+  {
+    "line": 8537,
+    "code": "await pushNotification(currentNick, `📌 Объявление «${l.title}» закреплено как «${pinLabel}»`, 'market');"
+  },
+  {
+    "line": 8554,
+    "code": "await pushNotification(currentNick, `🔥 Бизнес «${b.name}» продвинут в ТОП на 7 дней!`, 'money');"
+  },
+  {
+    "line": 8642,
+    "code": "await pushNotification(currentNick,`📝 Заявка на \"${target}\" отправлена`,'system');"
+  },
+  {
+    "line": 8653,
+    "code": "await pushNotification(currentNick,'📝 Заявка отозвана','system');"
+  },
+  {
+    "line": 8772,
+    "code": "try{await pushNotification(ADMIN,`🧹 Отчёт уборщика: ${currentNick}`,'system');}catch(e){console.error('[notification pipeline][cleaner report]',e);}"
+  },
+  {
+    "line": 8850,
+    "code": "await pushNotification(target,msg,'system');"
+  },
+  {
+    "line": 9005,
+    "code": "await pushNotification(s.worker,`✅ Уборка одобрена. +${amt}₽`,'money');"
+  },
+  {
+    "line": 9015,
+    "code": "await pushNotification(s.worker,'❌ Отчёт по уборке отклонён','system');"
+  },
+  {
+    "line": 9073,
+    "code": "await pushNotification(p.author, msg, 'system');"
+  },
+  {
+    "line": 9120,
+    "code": "await pushNotification(r.client, msg, 'system');"
+  },
+  {
+    "line": 9157,
+    "code": "await pushNotification(target, `🏛 Мэрия назначила вас на должность: ${job}`, 'system');"
+  },
+  {
+    "line": 9182,
+    "code": "await pushNotification(a.from,`✅ Должность: ${a.target}`,'system');"
+  },
+  {
+    "line": 9185,
+    "code": "await pushNotification(a.from,`❌ Заявка на ${a.target} отклонена`,'system');"
+  },
+  {
+    "line": 9214,
+    "code": "await pushNotification(target,`${amt>0?'💰 Зачислено':'💸 Списано'} ${Math.abs(amt).toLocaleString('ru-RU')} ₽ мэром`,'money');"
+  },
+  {
+    "line": 9257,
+    "code": "await pushNotification(target,`💸 Штраф ${amt}₽ от мэрии. Причина: ${reason}`,'money');"
+  },
+  {
+    "line": 9280,
+    "code": "await pushNotification(target, on"
+  },
+  {
+    "line": 9333,
+    "code": "await pushNotification(target,'🚪 Мэрия уволила вас со всех работ','system');"
+  },
+  {
+    "line": 9358,
+    "code": "await pushNotification(target,`🚪 Мэрия уволила вас с должности «${targetRole}»`,'system');"
+  },
+  {
+    "line": 9370,
+    "code": "pushNotification(nick,'✅ Ваш аккаунт подтверждён мэрией!','system');"
+  },
+  {
+    "line": 12018,
+    "code": "await pushNotification(ADMIN, `🗑 ${currentNick} просит закрыть бизнес «${b.name}»: ${reason}`, 'system');"
+  },
+  {
+    "line": 12037,
+    "code": "if(b.owner) await pushNotification(b.owner, `🗑 Ваш бизнес «${b.name}» закрыт мэрией.`, 'system');"
+  },
+  {
+    "line": 12072,
+    "code": "if(b.owner) await pushNotification(b.owner, `✅ Ваш бизнес «${b.name}» закрыт по вашей заявке.`, 'system');"
+  },
+  {
+    "line": 12082,
+    "code": "await pushNotification(r.owner, `❌ Заявка на закрытие бизнеса «${r.bizName}» отклонена мэрией.`, 'system');"
+  },
+  {
+    "line": 12137,
+    "code": "await pushNotification(a.owner, `🎉 Ваш бизнес «${a.name}» одобрен мэрией!`, 'system');"
+  },
+  {
+    "line": 12147,
+    "code": "await pushNotification(a.owner, `❌ Заявка на бизнес «${a.name}» отклонена мэрией.`, 'system');"
+  },
+  {
+    "line": 12464,
+    "code": "await pushNotification(b.owner, `📋 Новая заявка в «${b.name}» от ${displayNick(u)} на роль ${b.roles?.[roleId]?.name||''}`, 'system');"
+  },
+  {
+    "line": 12547,
+    "code": "await Promise.all([...staff].map(nick => pushNotification(nick, `🛒 Новый заказ в «${b.name}» от ${buyerName} (код: ${orderId.slice(-6).toUpperCase()})`, 'money')));"
+  },
+  {
+    "line": 12583,
+    "code": "if(order.owner) await pushNotification(order.owner, `✅ Заказ от ${order.clientName || order.client} выполнен и подтверждён!`, 'money');"
+  },
+  {
+    "line": 12584,
+    "code": "if(order.client) await pushNotification(order.client, `✅ Заказ в «${order.bizName}» подтверждён — спасибо!`, 'money');"
+  },
+  {
+    "line": 12589,
+    "code": "if(order.owner) await pushNotification(order.owner, `👤 ${order.clientName || order.client} подтвердил получение заказа — подтвердите с вашей стороны!`, 'money');"
+  },
+  {
+    "line": 12592,
+    "code": "if(order.client) await pushNotification(order.client, `🏪 «${order.bizName}» отметил заказ как выданный — подтвердите получение!`, 'money');"
+  },
+  {
+    "line": 12852,
+    "code": "await pushNotification(bb.owner, `${type==='complaint'?'⚠️ Жалоба':'📩 Запрос'} в «${bb.name}» от ${displayNick(uu)}`, 'system');"
+  },
+  {
+    "line": 13007,
+    "code": "await pushNotification(op.nick, `💰 Начислена автозарплата ${op.amount}₽ от «${b.name}»`, 'money');"
+  },
+  {
+    "line": 13156,
+    "code": "await pushNotification(applicant, `✅ Вас приняли в «${b.name}» на роль ${roleName}!`, 'system');"
+  },
+  {
+    "line": 13164,
+    "code": "await pushNotification(applicant, `❌ Заявка в «${b.name}» отклонена`, 'system');"
+  },
+  {
+    "line": 13179,
+    "code": "await pushNotification(nick, `🚪 Вы уволены из бизнеса «${snap.val()?.name||''}»`, 'system');"
+  },
+  {
+    "line": 13203,
+    "code": "await pushNotification(nick, `💰 Получена зарплата ${amt.toLocaleString()}₽ от «${b.name}»`, 'money');"
+  },
+  {
+    "line": 13382,
+    "code": "await pushNotification(renterNick, `🏘 Мэрия изъяла у вас аренду здания «${buildingName}».`, 'system');"
+  },
+  {
+    "line": 13482,
+    "code": "await pushNotification(b.renter, `🏘 Аренда здания «${b.name}» истекла и сброшена.`, 'system');"
+  },
+  {
+    "line": 13840,
+    "code": "try { await pushNotification(nick, `🏁 Тебе назначен ${dayName} гонок — загляни в Мероприятия!`, 'system'); } catch(e){}"
+  },
+  {
+    "line": 14026,
+    "code": "await pushNotification(b.owner, `💳 Терминал: ${currentNick} оплатил ${_terminalAmt}₽${_terminalDesc?' ('+_terminalDesc+')':''}`, 'money');"
+  },
+  {
+    "line": 14956,
+    "code": "await pushNotification(currentNick, `⭐ ${actionText}!`, 'system');"
+  },
+  {
+    "line": 14979,
+    "code": "await pushNotification(currentNick, '🔔 Подписка отменена', 'system');"
+  },
+  {
+    "line": 15135,
+    "code": "await pushNotification(ADMIN, `🏛 Депутат ${currentNick}: ${typeLabels[type] || type} — «${title}»`, 'system');"
+  },
+  {
+    "line": 15218,
+    "code": "pushNotification(l.seller,`💰 ${currentNick} купил «${l.title}» за ${price} ₽`,'market'),"
+  },
+  {
+    "line": 15219,
+    "code": "pushNotification(currentNick,`✅ «${l.title}» куплено. Теперь оформите доставку.`,'market')"
+  },
+  {
+    "line": 15702,
+    "code": "await pushNotification(doc.nick, `🏥 Новая запись: ${first} ${last} — ${s.name} (${date} ${time})`, 'system');"
+  },
+  {
+    "line": 15703,
+    "code": "await pushNotification(currentNick, `⏳ Заявка на приём отправлена врачу`, 'system');"
+  },
+  {
+    "line": 15725,
+    "code": "await pushNotification(a.doctorNick, `❌ Клиент отменил запись: ${a.serviceName} (${a.date} ${a.time})`, 'system');"
+  },
+  {
+    "line": 15778,
+    "code": "await pushNotification(appt.clientNick, `⚠️ Недостаточно средств для оплаты приёма «${appt.serviceName}» (${price}₽). Пополните баланс.`, 'money');"
+  },
+  {
+    "line": 15786,
+    "code": "await pushNotification(appt.clientNick, `💳 Оплата приёма «${appt.serviceName}» проведена: ${price}₽`, 'money');"
+  },
+  {
+    "line": 15787,
+    "code": "await pushNotification(appt.doctorNick, `💰 Получена оплата за приём «${appt.serviceName}»: ${price}₽ от ${appt.clientNick}`, 'money');"
+  },
+  {
+    "line": 15866,
+    "code": "await pushNotification(a.clientNick, notifyTextFn(a), 'system');"
+  },
+  {
+    "line": 15954,
+    "code": "await pushNotification(doc.nick, `🩺 Новая заявка на должность помощника врача: ${currentNick} (КВЭ ${score})`, 'system');"
+  },
+  {
+    "line": 15983,
+    "code": "await pushNotification(a.from, `✅ Вы приняты на должность помощника врача`, 'system');"
+  },
+  {
+    "line": 15995,
+    "code": "if(a) await pushNotification(a.from, `❌ Заявка на должность помощника врача отклонена`, 'system');"
+  },
+  {
+    "line": 16028,
+    "code": "await pushNotification(asst.nick, `💰 Получена зарплата ${amount}₽ от врача`, 'money');"
+  },
+  {
+    "line": 16885,
+    "code": "await pushNotification(target, `✅ Мэрия выдала вам ${kind==='bike'?'права на велосипед 🚲':'права на скутер 🛵'}`,'system');"
+  },
+  {
+    "line": 16895,
+    "code": "await pushNotification(target, `❌ Мэрия изъяла ваши ${kind==='bike'?'права на велосипед 🚲':'права на скутер 🛵'}`,'system');"
+  },
+  {
+    "line": 16959,
+    "code": "await pushNotification(target.nick, `✅ КСБ/Полиция выдали вам ${kind==='bike'?'права на велосипед 🚲':'права на скутер 🛵'}`,'system');"
+  },
+  {
+    "line": 16971,
+    "code": "await pushNotification(target.nick, `❌ КСБ/Полиция изъяли ваши ${kind==='bike'?'права на велосипед 🚲':'права на скутер 🛵'}`,'system');"
+  },
+  {
+    "line": 17060,
+    "code": "await pushNotification(ADMIN, `👮 Новый запрос от полиции (${window.currentNick}) на ${target}`,'system');"
+  },
+  {
+    "line": 17091,
+    "code": "await pushNotification(r.target, `💸 Штраф от мэрии: ${r.amount}₽ — ${r.reason||''}`,'money');"
+  },
+  {
+    "line": 17097,
+    "code": "await pushNotification(r.officer, `✅ Ваш запрос на ${r.target} одобрен`,'system');"
+  },
+  {
+    "line": 17105,
+    "code": "await pushNotification(r.officer, `❌ Ваш запрос на ${r.target} отклонён`,'system');"
+  },
+  {
+    "line": 17459,
+    "code": "? Promise.resolve().then(()=>pushNotification(tnick, `${emoji} ${issuerRole} выписало штраф ${amt}₽ — ${reason} (от ${myLabel})`, 'money'))"
+  },
+  {
+    "line": 17462,
+    "code": "? Promise.resolve().then(()=>pushNotification(ADMIN, `${emoji} ${issuerRole} ${myLabel} оштрафовал ${targetLabel} на ${amt}₽ — ${reason}`, 'system'))"
+  },
+  {
+    "line": 17605,
+    "code": "await pushNotification(current(),'🚲 Права на велосипед получены','system');"
+  },
+  {
+    "line": 17637,
+    "code": "await pushNotification(nick,'🛵 Экзамен на права на скутер оплачен: 1 500 ₽. При провале экзамена деньги не возвращаются.','money');"
+  },
+  {
+    "line": 17666,
+    "code": "await pushNotification(nick,'✅ Экзамен на скутер сдан. Заявка отправлена в мэрию.','system');"
+  },
+  {
+    "line": 17667,
+    "code": "await pushNotification(ADMIN,`🛵 ${String(u.displayName||nick)} (@${nick}) сдал(а) экзамен на скутер — заявка отправлена в мэрию.`,'system');"
+  },
+  {
+    "line": 17671,
+    "code": "await pushNotification(nick,`❌ Экзамен на скутер не сдан (${score}/${SCOOTER_EXAM_QUESTIONS.length}). 1 500 ₽ не возвращаются.`,'money');"
+  },
+  {
+    "line": 17725,
+    "code": "await pushNotification(nick,approve?'🛵 Права на скутер одобрены мэрией.':'❌ Мэрия отказала в выдаче прав на скутер. Деньги не возвращаются.','system');"
+  },
+  {
+    "line": 17788,
+    "code": "await pushNotification(ADMIN,`🎓 Новая заявка «К-образование» от ${String(u.displayName||nick)} (@${nick})`,'system');"
+  },
+  {
+    "line": 17789,
+    "code": "await pushNotification(nick,'🎓 К-образование оплачено. Заявка отправлена в мэрию.','system');"
+  }
+]
