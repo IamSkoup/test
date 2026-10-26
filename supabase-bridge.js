@@ -92,10 +92,39 @@ async function mutate(operation, reference, value, expected = null) {
   return result;
 }
 
+async function secureRpc(name, args) {
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) throw new Error(error.message || 'Операция на сервере не выполнена');
+  notifyLocal('users');
+  return data;
+}
+
+// Only the authenticated user may edit an allowlisted part of their profile.
+// This deliberately never accepts balance, rewards, roles, or subscription flags.
+export const patchOwnProfile = changes => secureRpc('kp_profile_patch', { p_patch: changes });
+export const manageOwnNotifications = (action, notificationId = null) =>
+  secureRpc('kp_manage_notifications', { p_action: action, p_notification_id: notificationId });
+export const claimVerifiedTask = (kind, taskId) =>
+  secureRpc('kp_claim_task', { p_kind: kind, p_task_id: taskId });
+export const withdrawVerifiedTasks = amount =>
+  secureRpc('kp_withdraw_tasks', { p_amount: amount });
+
 export async function set(reference, value) { return mutate('set', reference, value); }
 export async function remove(reference) { return mutate('remove', reference); }
 export async function update(reference, changes) {
   if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new Error('update ожидает объект');
+  // Legacy Firebase updated users/<nick> with a flat object. The old SQL
+  // correctly refuses whole-record writes; send normal profile edits to an
+  // owner-only, field-by-field validated server procedure instead.
+  if (/^users\/[^/]+$/.test(reference.path) && !Object.keys(changes).some(key => key.includes('/'))) {
+    const { data: userResult, error: userError } = await supabase.auth.getUser();
+    if (userError || !userResult?.user) throw new Error('Сначала войдите в аккаунт');
+    const { data: ownProfile, error: profileError } = await supabase.from('kp_profiles')
+      .select('nickname').eq('user_id', userResult.user.id).maybeSingle();
+    if (profileError || ownProfile?.nickname !== reference.path.slice(6))
+      throw new Error('Нельзя изменять чужой профиль');
+    return patchOwnProfile(changes);
+  }
   // Firebase supports slash-separated update keys and null-as-delete.
   const changesWithPaths = Object.entries(changes).filter(([key]) => key.includes('/') || !reference.path);
   if (changesWithPaths.length) {

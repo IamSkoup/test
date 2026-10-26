@@ -6,7 +6,7 @@ const KAPANI_CONFIG = Object.freeze({
         // Public/browser key. Never put service_role or sb_secret_* here.
         anonKey: "sb_publishable_1JhKuvlyy43Zehyr4Z-JZg_AIfMiAts"
     },
-    // A new VAPID key pair must be configured together in Edge Function secrets.
+    // Public half matches the live Edge Function secrets. Never place the private half here.
     webPushVapidPublicKey: "BC2-KpOURTy2hZwC6pVNSgu6zbFVohUWuPnK8SOY5-xBupWzspvbhoMaSbp-ya3xB5CZ5IHONm5PQeWSKLyfm8E",
     pushWorkerUrl: "https://npivvwwkdnbeqmjcwrke.supabase.co/functions/v1/kapani-push",
     admin: { username: "Денис" },

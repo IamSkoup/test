@@ -1,4 +1,5 @@
-// Deploy as a Supabase Edge Function with JWT verification enabled.
+// Deploy with legacy gateway JWT verification disabled. /register and /health
+// are public; every user-scoped endpoint validates the Supabase bearer JWT.
 // Secrets: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT.
 import { createClient } from 'npm:@supabase/supabase-js@2.49.8';
 import webpush from 'npm:web-push@3.6.7';
@@ -111,21 +112,26 @@ async function sendTo(nick: string, data: Record<string, unknown>) {
 
 async function notify(from: { id: string; nick: string }, body: Record<string, unknown>) {
   const targetNick = toNick(body.targetNick || body.to);
-  const message = String(body.text || body.body || '').trim().slice(0, 2000);
+  const message = String(body.text || body.body || '').trim().slice(0, 500);
   if (!targetNick || !message) return json({ error: 'Recipient and text required' }, 400);
   if (!await getTarget(targetNick)) return json({ error: 'Recipient not found' }, 404);
-  const category = categoryOf(body.category);
-  const notificationId = /^[A-Za-z0-9_-]{5,100}$/.test(String(body.notificationId || ''))
-    ? String(body.notificationId) : crypto.randomUUID();
+  const { data: quotaOk, error: quotaError } = await admin.rpc('kp_consume_notify_quota', { p_sender: from.id });
+  if (quotaError) throw quotaError;
+  if (!quotaOk) return json({ error: 'Лимит отправки уведомлений исчерпан на сегодня' }, 429);
+  // Clients can report social events, never claim to be the mayor, bank or system.
+  const category = 'social';
+  const notificationId = crypto.randomUUID();
   const createdAt = Date.now();
+  const claimedUrl=String(body.url || '/kapani/');
+  const safeUrl = /^\/kapani\/(?:\?[^#]*)?(?:#.*)?$/.test(claimedUrl) ? claimedUrl : '/kapani/';
   const record = {
     text: message,
-    title: String(body.title || 'Капани').slice(0, 120),
+    title: `От ${from.nick}`.slice(0, 120),
     category, cat: category,
-    source: String(body.source || '').slice(0, 80),
+    source: 'user_notification',
     from: from.nick,
     sourceMessageId: String(body.sourceMessageId || '').slice(0, 120),
-    url: String(body.url || '/kapani/').slice(0, 500),
+    url: safeUrl,
     createdAt,
     time: new Intl.DateTimeFormat('ru-RU', { timeZone:'Europe/Moscow',hour:'2-digit',minute:'2-digit' }).format(createdAt)
   };
@@ -145,6 +151,13 @@ async function chatFanout(from: { id: string; nick: string }, body: Record<strin
   const { data: root } = await admin.from('kp_tree_roots').select('document').eq('branch','chat').maybeSingle();
   const message = root?.document?.[messageId];
   if (!message || message.nick !== from.nick) return json({ error:'Chat author mismatch' }, 403);
+  const { error: recordedError } = await admin.from('kp_push_events').insert({
+    event_id:`chat:${messageId}`,sender:from.id
+  });
+  if (recordedError) {
+    if (recordedError.code === '23505') return json({ ok:true,sent:0,reason:'event already processed' });
+    throw recordedError;
+  }
   const preview = String(message.text || '').slice(0, 100) ||
     ({ video:'Видео', image:'Фото', voice:'Голосовое', video_circle:'Видеосообщение' }[message.msgType as string] || 'Новое сообщение');
   const { data: recipients } = await admin.from('kp_profiles').select('nickname').neq('user_id', from.id).limit(200);

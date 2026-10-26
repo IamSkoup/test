@@ -58,6 +58,12 @@ declare
     'weeklySalary','salary','isAdmin','isMayor','prime','ultra'
   ];
   protected text;
+  allowed_profile_fields text[] := array[
+    'displayName','bio','about','status','avatar','avatarUrl','photoURL',
+    'lastSeen','online','settings','lastActive','isOnline'
+  ];
+  candidate_key text;
+  permitted boolean;
 begin
   if p_path is null or length(p_path) > 400 or p_path ~ '[[:cntrl:]]' then
     raise exception 'Invalid tree path';
@@ -69,14 +75,13 @@ begin
 
   if p_operation = 'read' then
     if top_branch is null then
-      if auth.uid() is null then return '{}'::jsonb; end if;
-      select coalesce(jsonb_object_agg(branch, document), '{}'::jsonb)
-        into result from public.kp_tree_roots;
-      return jsonb_build_object('value', result, 'revision', 0);
+      -- Never expose all account, chat, finance and private trees in one call.
+      raise exception 'Reading the database root is not allowed';
     end if;
-    if auth.uid() is null and top_branch <> 'users' then
+    if auth.uid() is null then
       return jsonb_build_object('value', null, 'revision', 0);
     end if;
+    select nickname into actor_nick from public.kp_profiles where user_id=auth.uid();
     select document, revision into stored, rev from public.kp_tree_roots where branch = top_branch;
     if stored is null then stored := '{}'::jsonb; rev := 0; end if;
     result := case when cardinality(subtree) > 0 then stored #> subtree else stored end;
@@ -84,16 +89,35 @@ begin
       -- A legacy profile is never a credential database. Do not return hashes.
       if cardinality(subtree) = 0 then
         select coalesce(jsonb_object_agg(key,
-          case when auth.uid() is null then jsonb_build_object('nick',key,'displayName',value->>'displayName')
-          else value - 'passwordHash' - 'passwordHashSalt' end), '{}'::jsonb)
+          value - 'passwordHash' - 'passwordHashSalt' - 'settings' - 'notifications'), '{}'::jsonb)
           into result from jsonb_each(coalesce(stored,'{}'::jsonb));
       elsif cardinality(subtree) = 1 and result is not null then
-        result := case when auth.uid() is null then
-          jsonb_build_object('nick',subtree[1],'displayName',result->>'displayName')
-          else result - 'passwordHash' - 'passwordHashSalt' end;
-      elsif subtree[array_length(subtree,1)] in ('passwordHash','passwordHashSalt') then
+        result := result - 'passwordHash' - 'passwordHashSalt';
+        if subtree[1] <> actor_nick then result := result - 'settings' - 'notifications'; end if;
+      elsif subtree[array_length(subtree,1)] in ('passwordHash','passwordHashSalt')
+         or (subtree[1] <> actor_nick and subtree[2] in ('settings','notifications')) then
         result := null;
       end if;
+    elsif top_branch = 'dms' then
+      if cardinality(subtree)=0 then
+        select coalesce(jsonb_object_agg(key,value),'{}'::jsonb) into result
+        from jsonb_each(coalesce(stored,'{}'::jsonb))
+        where split_part(key,'__dm__',1)=actor_nick
+           or split_part(key,'__dm__',2)=actor_nick;
+      elsif split_part(subtree[1],'__dm__',1) <> actor_nick
+        and split_part(subtree[1],'__dm__',2) <> actor_nick then
+        raise exception 'Not a DM participant';
+      end if;
+    elsif top_branch in ('dmIndex','readState','presence','passports','licenses','walls') then
+      if cardinality(subtree)=0 then
+        result:=jsonb_build_object(actor_nick,coalesce(stored->actor_nick,'null'::jsonb));
+      elsif subtree[1]<>actor_nick then
+        raise exception 'This profile data is private';
+      end if;
+    elsif top_branch in ('municipalTreasury','kp_wallets','kp_ledger','kp_roles','pushOutbox',
+                         'adminForceHireLog','advertiserStats','wallets','ledger',
+                         'taxiHistory','atmRequests','deputyProposals','hospital') then
+      raise exception 'Read this information through a protected service';
     end if;
     return jsonb_build_object('value', result, 'revision', rev);
   end if;
@@ -107,48 +131,58 @@ begin
   if top_branch is null or cardinality(parts) > 12 or top_branch !~ '^[A-Za-z][A-Za-z0-9_]*$' then
     raise exception 'Invalid write path';
   end if;
-  select exists (
-    select 1 from public.kp_roles where user_id = auth.uid() and role in ('admin','mayor')
-  ) into is_staff;
-
-  if top_branch in ('pushOutbox','municipalTreasury','adminForceHireLog','advertiserStats',
-                    'wallets','ledger','kp_wallets','kp_roles') then
-    raise exception 'This data can only be changed by a trusted server operation';
+  -- Deny by default. Legacy business/treasury/taxi/casino operations must be
+  -- explicitly reimplemented as transactional server functions, never as JSON writes.
+  if top_branch not in ('users','chat','dms','dmIndex','presence','readState','typing','walls') then
+    raise exception 'Protected operation: a dedicated server function is required';
   end if;
 
   if top_branch = 'users' then
     target_nick := subtree[1];
-    if target_nick is null or (target_nick <> actor_nick and not is_staff) then
+    if target_nick is null or target_nick <> actor_nick then
       raise exception 'Cannot modify another user';
     end if;
-    if not is_staff then
-      if cardinality(subtree) > 1 and subtree[2] = any(sensitive) then
-        raise exception 'Protected account field';
-      end if;
-      if p_operation = 'update' and cardinality(subtree) = 1 and jsonb_typeof(p_payload) = 'object' then
-        if exists(select 1 from jsonb_object_keys(p_payload) as key where key = any(sensitive)) then
-          raise exception 'Protected account field';
-        end if;
-      end if;
+    if cardinality(subtree) < 2 then
+      raise exception 'Replacing an entire user record is forbidden';
     end if;
-  elsif top_branch = 'notifications' then
-    raise exception 'Use the notification service';
-  elsif top_branch = 'chat' and p_operation <> 'remove' then
-    if cardinality(subtree) <> 1 or (p_operation = 'set' and p_payload->>'nick' <> actor_nick) then
-      raise exception 'Chat message author mismatch';
+    if subtree[2]='notifications' then
+      if cardinality(subtree) <> 4 or subtree[4] not in ('read','seen')
+         or p_operation <> 'set' or jsonb_typeof(p_payload) <> 'boolean' then
+        raise exception 'Notifications are written by the server';
+      end if;
+    elsif subtree[2] <> all(allowed_profile_fields) then
+      raise exception 'Protected account field';
+    elsif cardinality(subtree) > 2 then
+      raise exception 'Nested profile edits are not allowed';
+    elsif subtree[2]='settings' and (p_operation <> 'update' or jsonb_typeof(p_payload)<>'object') then
+      raise exception 'Settings must be patched';
+    end if;
+  elsif top_branch = 'chat' then
+    if cardinality(subtree) <> 1 then
+      raise exception 'Invalid message path';
     end if;
   elsif top_branch = 'dms' then
-    if not (position(actor_nick in coalesce(subtree[1],'')) > 0) then
+    if split_part(coalesce(subtree[1],''),'__dm__',1) <> actor_nick
+       and split_part(coalesce(subtree[1],''),'__dm__',2) <> actor_nick then
       raise exception 'Not a DM participant';
     end if;
-    if cardinality(subtree) >= 3 and subtree[2] = 'messages'
-       and p_operation = 'set' and p_payload->>'nick' <> actor_nick then
-      raise exception 'DM message author mismatch';
+    if cardinality(subtree) <> 3 or subtree[2] <> 'messages' then
+      if cardinality(subtree) <> 3 or subtree[2] <> 'lastRead'
+        or subtree[3] <> actor_nick or p_operation <> 'set' then
+        raise exception 'Only your own DM messages and read position can be edited';
+      end if;
     end if;
   elsif top_branch in ('dmIndex','presence','readState','typing','walls') then
-    if subtree[1] <> actor_nick and not is_staff then
+    if subtree[1] <> actor_nick then
       -- Typing/dm has a combined conversation key, validated separately.
-      if top_branch <> 'typing' then raise exception 'Cannot edit another user view'; end if;
+      if top_branch <> 'typing' or not (
+        (subtree[1]='chat' and subtree[2]=actor_nick) or
+        (subtree[1]='dm' and subtree[3]=actor_nick and
+          (split_part(coalesce(subtree[2],''),'__dm__',1)=actor_nick
+           or split_part(coalesce(subtree[2],''),'__dm__',2)=actor_nick))
+      ) then
+        raise exception 'Cannot edit another user view';
+      end if;
     end if;
   end if;
 
@@ -159,6 +193,22 @@ begin
     return jsonb_build_object('conflict',true,'revision',rev);
   end if;
   old_value := case when cardinality(subtree) = 0 then stored else stored #> subtree end;
+  if top_branch='chat' or (top_branch='dms' and subtree[2]='messages') then
+    if old_value is not null and old_value->>'nick' <> actor_nick then
+      raise exception 'Cannot modify another author message';
+    end if;
+    if p_operation='set' and (jsonb_typeof(p_payload)<>'object'
+      or p_payload->>'nick' <> actor_nick) then
+      raise exception 'Message author mismatch';
+    end if;
+    if p_operation='update' and (p_payload ? 'nick' or p_payload ? 'createdAt'
+      or p_payload ? 'mediaUrl' or p_payload ? 'msgType') then
+      raise exception 'Message identity fields cannot be changed';
+    end if;
+    if p_operation='update' and old_value is null then
+      raise exception 'Message missing';
+    end if;
+  end if;
   if p_operation = 'set' then
     new_value := p_payload;
   elsif p_operation = 'remove' then
@@ -168,23 +218,10 @@ begin
     new_value := coalesce(old_value,'{}'::jsonb) || p_payload;
   end if;
 
-  -- User-level replacements are common in the old code. Never let one smuggle
-  -- money, roles or privileges through a full-object transaction.
-  if top_branch = 'users' and not is_staff and cardinality(subtree) = 1 then
-    if old_value is null then
-      if coalesce((new_value->>'balance')::numeric,0) <> 0
-         or coalesce((new_value->>'taskBalance')::numeric,0) <> 0
-         or coalesce((new_value->>'savingsBalance')::numeric,0) <> 0
-         or coalesce(new_value->>'job','Житель') <> 'Житель'
-         or coalesce((new_value->>'accountVerified')::boolean,false) then
-        raise exception 'Invalid initial account state';
-      end if;
-    else
-      foreach protected in array sensitive loop
-        if old_value->protected is distinct from new_value->protected then
-          raise exception 'Protected field %',protected;
-        end if;
-      end loop;
+  if top_branch='users' and subtree[2]='notifications' then
+    if old_value is null then raise exception 'Notification missing'; end if;
+    if new_value is not null and jsonb_typeof(new_value)<>'boolean' then
+      raise exception 'Invalid notification read state';
     end if;
   end if;
 
@@ -205,6 +242,20 @@ $$;
 
 revoke all on function public.kp_tree_access(text,text,jsonb,bigint) from public;
 grant execute on function public.kp_tree_access(text,text,jsonb,bigint) to anon,authenticated;
+
+-- A pre-login screen may discover public display names without receiving
+-- private profiles, password material, notification inboxes or balances.
+create or replace function public.kp_public_profiles()
+returns jsonb language sql stable security definer set search_path='' as $$
+  select coalesce(jsonb_object_agg(e.key,jsonb_build_object(
+    'nick',e.key,'displayName',left(coalesce(e.value->>'displayName',e.key),60))),
+    '{}'::jsonb)
+  from public.kp_tree_roots r
+  cross join lateral jsonb_each(r.document) as e(key,value)
+  where r.branch='users';
+$$;
+revoke all on function public.kp_public_profiles() from public;
+grant execute on function public.kp_public_profiles() to anon,authenticated;
 
 do $$ begin
   if not exists(select 1 from pg_publication_tables where pubname='supabase_realtime'
@@ -278,6 +329,38 @@ create index if not exists kp_signup_attempts_ip_time on public.kp_signup_attemp
 alter table public.kp_signup_attempts enable row level security;
 revoke all on public.kp_signup_attempts from anon,authenticated;
 
+-- Prevent a signed-in browser from flooding arbitrary users with notifications.
+create table if not exists public.kp_notify_quota (
+  sender uuid not null references auth.users(id) on delete cascade,
+  quota_day date not null default (now() at time zone 'utc')::date,
+  used integer not null default 0 check (used between 0 and 60),
+  primary key(sender,quota_day)
+);
+alter table public.kp_notify_quota enable row level security;
+revoke all on public.kp_notify_quota from anon,authenticated;
+
+create table if not exists public.kp_push_events (
+  event_id text primary key,
+  sender uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+alter table public.kp_push_events enable row level security;
+revoke all on public.kp_push_events from anon,authenticated;
+
+create or replace function public.kp_consume_notify_quota(p_sender uuid)
+returns boolean language plpgsql security definer set search_path='' as $$
+declare next_used integer;
+begin
+  insert into public.kp_notify_quota(sender,quota_day,used)
+    values(p_sender,(now() at time zone 'utc')::date,1)
+    on conflict(sender,quota_day) do update set used=public.kp_notify_quota.used+1
+      where public.kp_notify_quota.used < 60
+    returning used into next_used;
+  return next_used is not null;
+end $$;
+revoke all on function public.kp_consume_notify_quota(uuid) from public,anon,authenticated;
+grant execute on function public.kp_consume_notify_quota(uuid) to service_role;
+
 create or replace function public.kp_tree_bootstrap_user(p_nick text,p_profile jsonb)
 returns boolean language plpgsql security definer set search_path = '' as $$
 declare whole jsonb; rev bigint; cleaned jsonb;
@@ -287,7 +370,7 @@ begin
   if not exists(select 1 from public.kp_profiles where nickname=p_nick) then
     raise exception 'Profile is missing';
   end if;
-  cleaned:=p_profile - 'passwordHash' - 'passwordHashSalt' - 'isAdmin' - 'roles';
+  cleaned:=jsonb_build_object('displayName',left(coalesce(p_profile->>'displayName',p_nick),60));
   cleaned:=cleaned || jsonb_build_object(
     'nick',p_nick,'balance',0,'taskBalance',0,'savingsBalance',0,
     'totalEarned',0,'accountVerified',false,'accountFrozen',false,

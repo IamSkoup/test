@@ -1,6 +1,9 @@
 # Kapani / Supabase — installation and verification
 
-Status: migration code prepared; **live schema/function changes not deployed**.
+Status on 26 October 2026: the KapaniPride project's SQL bridge, Storage bucket,
+public-name lookup, and `kapani-push` Edge Function **have been deployed**.
+The live `/health` endpoint returned `{"ok":true,"backend":"supabase","vapid":true}`.
+This does not mean the website is published or the migration is complete.
 
 ## Architecture
 
@@ -18,18 +21,23 @@ to use those protected operations before public release.
 
 ## Deployment
 
-Execute `supabase/001_tree_bridge.sql` on the intended Supabase project after
-review. It creates additional tables and functions, configures Realtime
-invalidation and a public-read `kapani-media` bucket. Existing `kp_*` tables
-are not deleted or overwritten.
+The intended Supabase project is `npivvwwkdnbeqmjcwrke`. An equivalent
+additive SQL migration was applied through the dashboard, followed by the
+`kp_public_profiles()` function. The migration creates new tables and functions,
+Realtime invalidation, and the public-read `kapani-media` bucket. It does not
+delete or overwrite any preexisting financial `kp_*` table or records.
+The included SQL script is a reproducible definition for fresh deployments;
+rerun it only after reviewing its impact on the target environment.
 
-Deploy `supabase/functions/kapani-push/index.ts`. The included
-`supabase/config.toml` disables gateway JWT verification because `/register`
+The function `kapani-push` has been deployed via Supabase's built-in editor.
+The included `supabase/config.toml` disables gateway JWT verification because `/register`
 and `/health` are intentionally accessible without a signed-in account.
 Other endpoints verify the Supabase user JWT inside the function.
 
-Set Edge Function secrets `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and
-`VAPID_SUBJECT` (a `mailto:` contact). They must belong to one P-256 key pair.
+Edge Function secrets `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and
+`VAPID_SUBJECT` were added through the dashboard. The VAPID subject is the
+placeholder `mailto:push@kapani.example`; replace it with a real contact
+address before public production. The two keys must belong to one P-256 key pair.
 The public half in `config.js` must match. Never ship the private half in a
 public repository or in an archive sent to users.
 
@@ -37,8 +45,9 @@ Deploy the site over HTTPS. The `firebase-messaging-sw.js` filename is
 retained for existing Service Worker registrations, but the actual code is
 standard Web Push, with no Firebase Messaging integration.
 
-Since old Firebase data is intentionally discarded, old Kapani nick/password
-accounts will need new registration. New password hashes stay inside
+Old Firebase-only nick/password accounts which were never migrated into
+Supabase Auth still need new registration. Existing Supabase Auth accounts
+are preserved, including the old «Кайон» account. Password hashes stay inside
 Supabase Auth and are not included in public user records.
 
 ## Acceptance tests
@@ -57,5 +66,64 @@ Screen. Push when the entire browser process is stopped depends on the OS;
 the server can deliver to the browser Push Service independently of an open
 Kapani tab, but cannot override platform restrictions.
 
-This package is not a verified complete production migration until the
-protected finance/order flows and deployed push stack pass integration tests.
+Security checks in the live SQL editor confirmed that direct browser calls
+cannot change account balances, casino balances, administrative roles or the
+municipal treasury. An additional privilege check confirmed RLS enabled and
+no direct authenticated UPDATE grants on `kp_wallets`, `kp_ledger`, `kp_roles`,
+`kp_treasury`, `kp_tree_roots`, and `kp_push_devices`.
+
+Not yet completed: port the legacy finance, casino outcomes, subscriptions,
+jobs, taxi/delivery and mayor actions to protected server-side operations;
+publish the static website; then run genuine multi-account, multi-browser
+end-to-end tests for sign-in, chat, image/audio/video uploads, and closed-tab
+push. Failed protected legacy mutations should display errors rather than
+silently re-enable unsafe balance editing. Do not consider this package ready
+for all public features until those gaps are closed.
+
+## Compatibility repair / 26 October
+
+The complete `supabase/002_account_and_tasks.sql` was applied to the
+`npivvwwkdnbeqmjcwrke` project on 26 October 2026. Verification in the SQL
+Editor found all six procedures installed: `kp_public_profiles`,
+`kp_ensure_my_profile`, `kp_manage_notifications`, `kp_profile_patch`,
+`kp_claim_task`, and `kp_withdraw_tasks`. The five owner-only procedures
+are executable by authenticated users only, while `kp_public_profiles`
+returns public names to guests for the login screen.
+
+This migration adds owner-only RPCs for notification
+removal, safe profile updates, verified limited task rewards and atomic
+withdrawal from the task balance into the canonical `kp_wallets` balance with
+ledger entry. No browser operation can choose reward amounts or directly set
+balances. The browser UI must still be published and two-account operations
+smoke-tested. Other finance and job features described above remain blocked.
+
+The database migration has already been run. Do not run it again merely to
+deploy the new frontend. Upload the updated static files to `/test/` with the
+same relative directory layout. Existing `kp_*` accounts, wallets and messages
+were not deleted by the migration. If creating a fresh Supabase project, run
+the complete SQL in the editor with no selection (button "Run" rather than
+"Run selected").
+
+Registration now sees all nicknames reserved in `kp_profiles`, including old
+accounts whose profile document was never created. An existing Supabase Auth
+identity cannot safely be claimed or deleted via an ordinary signup; the owner
+must authenticate with the existing password and original Auth email. The
+login form includes an optional "Почта старого аккаунта" field. For «Кайон»,
+the authenticated account has an original Gmail address starting with "sa";
+use the full known email, not this hint, plus the existing password. On
+successful sign-in, `kp_ensure_my_profile()` creates its missing JSON user
+document only for the caller and keeps the canonical wallet balance.
+If the password is forgotten, recovery must be performed through the
+original email and Supabase Auth; never publish or share a password or JWT.
+Changing the public display name preserves the
+stable internal username so conversations, authentication and references are
+not orphaned. Login resolves the new display name to that original username.
+
+The leaderboard now uses a default avatar when none was saved, and a failed
+avatar URL also falls back. Account password changes use Supabase Auth, not
+client-side `passwordHash`. Avatar changes do not require mayoral confirmation.
+
+Open `start-kapani.bat` to preview the extracted website on Windows. Opening
+`index.html` directly with the `file://` protocol is unsupported because the
+browser blocks ES Modules. The HTML now explains that failure instead of
+showing an endless server connection animation.

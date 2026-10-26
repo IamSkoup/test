@@ -4,6 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0b241b">
+<script>
+if (location.protocol === 'file:') {
+  window.addEventListener('DOMContentLoaded', () => {
+    const notice = document.createElement('div');
+    notice.setAttribute('role','alert');
+    notice.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#071811;color:#effff4;display:flex;align-items:center;justify-content:center;padding:30px;font:16px/1.6 system-ui,sans-serif;text-align:center';
+    notice.innerHTML = '<div style="max-width:650px"><h2 style="font-size:24px;margin:0 0 12px">Сайт запущен неправильно</h2><p>JavaScript-модули не работают через <code>file://</code>. Закройте эту вкладку, дважды нажмите <b>start-kapani.bat</b> в папке сайта и откройте адрес <b>http://localhost:8765/</b>. Нужен установленный Python 3 либо любой локальный HTTP-сервер.</p></div>';
+    document.body.appendChild(notice);
+  }, { once:true });
+}
+</script>
 <script>window.__kapaniLoaderStart = Date.now();</script>
 <script>
 try {
@@ -1192,13 +1203,15 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
         <div class="card-title">Вход / Регистрация</div>
         <input id="lgNick" type="text" placeholder="Ваше отображаемое имя" autocomplete="username" required minlength="2" maxlength="40" onkeydown="if(event.key==='Enter'){event.preventDefault();qs('lgPass').focus();}">
         <div style="position:relative;">
-            <input id="lgPass" type="password" placeholder="Пароль" autocomplete="current-password" required minlength="4" maxlength="60" style="padding-right:46px;" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
+            <input id="lgPass" type="password" placeholder="Пароль" autocomplete="current-password" required minlength="1" maxlength="60" style="padding-right:46px;" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
             <button type="button" class="btn btn-ghost btn-sm" onclick="toggleAuthPasswordVisibility()" aria-label="Показать или скрыть пароль" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:auto;padding:6px 10px;font-size:13px;">👁</button>
         </div>
+        <input id="lgLegacyEmail" type="email" placeholder="Почта старого аккаунта (если вход не работает)" autocomplete="email" maxlength="254" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
+        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-top:2px;">Старый аккаунт, например «Кайон», мог быть создан на другую почту. Укажи здесь его прежнюю почту и пароль. Для новых аккаунтов поле оставь пустым.</div>
         <input id="lgInviter" type="text" placeholder="Кто вас пригласил? (необязательно)" autocomplete="off" maxlength="40" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
         <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-top:2px;">Для нового аккаунта можно указать отображаемое имя рекламщика, который вас пригласил.</div>
         <button class="btn btn-primary" id="authBtn" onclick="handleAuth()" style="margin-top:6px" aria-label="Войти или создать аккаунт">Войти / Создать аккаунт</button>
-        <div style="font-size:12px;color:var(--muted);text-align:center;margin-top:14px">Вход — по отображаемому имени и паролю.<br>Если такого имени ещё нет, аккаунт создастся автоматически с указанным паролем.<br>Переводы и поиск — по отображаемому имени.</div>
+        <div style="font-size:12px;color:var(--muted);text-align:center;margin-top:14px">Вход — по отображаемому имени и паролю. Старому аккаунту может понадобиться его почта.<br>Если такого имени ещё нет, аккаунт создастся автоматически с указанным паролем (от 8 символов).<br>Переводы и поиск — по отображаемому имени.</div>
     </div>
 </div>
 
@@ -2678,7 +2691,8 @@ window.kapaniLoadLeaflet = (function(){
 };
 import { supabase, db, ref, set, get, update, push, remove, onValue, off,
     serverTimestamp, runTransaction, query, orderByChild, equalTo, limitToLast,
-    onDisconnect, authEmail } from './supabase-bridge.js';
+    onDisconnect, authEmail, patchOwnProfile, manageOwnNotifications,
+    claimVerifiedTask, withdrawVerifiedTasks } from './supabase-bridge.js';
 
 // Messaging / Functions / Storage are initialized only when their functionality is actually used.
 let functions = null;
@@ -2689,14 +2703,31 @@ let authInitPromise = null;
 let kapaniSessionEstablishPromise = null;
 let kapaniSessionEstablishNick = null;
 let kapaniSessionRetryTimer = null;
+let kapaniLegacyLoginEmail = '';
+let kapaniVerifiedIdentity = null;
 
 async function ensureAuth(){
     if(!authInstance) authInstance = {currentUser:null};
     authModule = { signOut: () => supabase.auth.signOut() };
     const {data,error}=await supabase.auth.getUser();
     if(error && !/session missing/i.test(String(error.message))) console.debug('[Kapani auth]',error.message);
-    authInstance.currentUser=data?.user ? { uid:data.user.user_metadata?.nick||currentNick,
-        id:data.user.id, email:data.user.email } : null;
+    const signedUser=data?.user;
+    if(!signedUser){
+        kapaniVerifiedIdentity=null;
+        authInstance.currentUser=null;
+        return authInstance;
+    }
+    // Local storage and user-editable metadata are not proof of ownership.
+    // Resolve the nickname exclusively by the signed-in user's database UUID.
+    let verifiedNick=kapaniVerifiedIdentity?.id===signedUser.id ? kapaniVerifiedIdentity.nick : null;
+    if(!verifiedNick){
+        const {data:owner,error:profileError}=await supabase.from('kp_profiles')
+            .select('nickname').eq('user_id',signedUser.id).maybeSingle();
+        if(profileError) console.debug('[Kapani auth] profile identity:',profileError.message);
+        verifiedNick=owner?.nickname||null;
+        if(verifiedNick) kapaniVerifiedIdentity={id:signedUser.id,nick:verifiedNick};
+    }
+    authInstance.currentUser=verifiedNick ? {uid:verifiedNick,id:signedUser.id,email:signedUser.email} : null;
     return authInstance;
 }
 async function ensureFunctions(){
@@ -2741,22 +2772,41 @@ async function withKapaniAuthRetry(operation, label, maxAttempts=3){
     throw lastError || new Error('Не удалось выполнить защищённую Firebase-операцию');
 }
 
-async function establishKapaniServerSession(nick, password){
+async function establishKapaniServerSession(nick, password, legacyEmail=''){
     const expectedNick = String(nick || '').trim();
     const secret = String(password || '');
     if(!expectedNick || !secret) throw new Error('Для входа нужны имя и пароль');
     const auth = await ensureAuth();
-    if(auth.currentUser?.uid === expectedNick) return auth.currentUser;
+    if(auth.currentUser?.uid === expectedNick){
+        const ensured=await supabase.rpc('kp_ensure_my_profile');
+        if(ensured.error) throw new Error('Не удалось восстановить данные аккаунта: '+ensured.error.message);
+        if(auth.currentUser.email?.toLowerCase()!==String(await authEmail(expectedNick)).toLowerCase())
+            kapaniLegacyLoginEmail=String(auth.currentUser.email||'').toLowerCase();
+        return auth.currentUser;
+    }
     if(kapaniSessionEstablishPromise && kapaniSessionEstablishNick===expectedNick) return kapaniSessionEstablishPromise;
     kapaniSessionEstablishNick=expectedNick;
     kapaniSessionEstablishPromise=(async()=>{
-        const {data,error}=await supabase.auth.signInWithPassword({email:await authEmail(expectedNick),password:secret});
-        if(error || !data?.session) throw new Error(error?.message||'Не удалось войти в Supabase');
+        const normalizedEmail=String(legacyEmail||'').trim().toLowerCase();
+        if(normalizedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
+            throw new Error('Укажи корректную почту старого аккаунта');
+        const {data,error}=await supabase.auth.signInWithPassword({
+            email:normalizedEmail||await authEmail(expectedNick), password:secret
+        });
+        if(error || !data?.session) throw new Error(normalizedEmail
+            ? 'Не удалось войти по старой почте и паролю: '+(error?.message||'нет сессии')
+            : 'Не удалось войти. Если аккаунт старый, впиши прежнюю почту: '+(error?.message||'нет сессии'));
         const serverProfile=await supabase.from('kp_profiles').select('nickname').eq('user_id',data.user.id).maybeSingle();
         if(serverProfile.error || serverProfile.data?.nickname!==expectedNick){
             await supabase.auth.signOut();
             throw new Error('Имя в защищённом профиле не совпадает');
         }
+        // Some migrated accounts have Auth + kp_profiles + wallet, but no JSON
+        // profile yet. The SECURITY DEFINER RPC can only create the caller's own.
+        const ensured=await supabase.rpc('kp_ensure_my_profile');
+        if(ensured.error) throw new Error('Не удалось восстановить данные аккаунта: '+ensured.error.message);
+        kapaniLegacyLoginEmail=normalizedEmail || (data.user.email?.toLowerCase()!==String(await authEmail(expectedNick)).toLowerCase()
+            ? String(data.user.email||'').toLowerCase() : '');
         auth.currentUser={uid:expectedNick,id:data.user.id,email:data.user.email};
         return auth.currentUser;
     })();
@@ -3092,8 +3142,17 @@ window.addEventListener('error', (event) => {
     // Можно добавить логирование в аналитическую систему
 });
 
+let lastProtectedMutationWarning=0;
 window.addEventListener('unhandledrejection', (event) => {
     console.error('Необработанный Promise rejection:', event.reason);
+    const message=String(event.reason?.message||event.reason||'');
+    if(/Protected operation|Protected account field|whole user record|Cannot modify another user|Notifications are server-managed|Replacing an entire user/i.test(message)){
+        if(Date.now()-lastProtectedMutationWarning>5000){
+            lastProtectedMutationWarning=Date.now();
+            toast('Эта операция ещё не перенесена на защищённый сервер. Деньги и права не изменены.','red');
+        }
+        event.preventDefault();
+    }
 });
 
 // ─── HELPERS ──────────────────────────────
@@ -3236,7 +3295,7 @@ async function requireKapaniServerSession(timeoutMs=15000){
         // memory-only and is never persisted by this helper.
         if(_kapaniSessionPassword){
             try{
-                const healed = await establishKapaniServerSession(nick, _kapaniSessionPassword);
+                const healed = await establishKapaniServerSession(nick, _kapaniSessionPassword, kapaniLegacyLoginEmail);
                 if(healed?.uid === nick) return healed;
             }catch(e){
                 console.warn('[Kapani auth] session healing:', e?.message || e);
@@ -3648,8 +3707,19 @@ async function findUserByPublicName(name){
             if(dn === q || normalizePublicName(u.referralCode) === q) return { nick, ...u };
         }
     }
-    const snap = await get(ref(db, 'users'));
-    const users = snap.val() || {};
+    // The login screen is not authenticated yet. It needs public names only,
+    // never a full account tree or password-related data.
+    const { data: publicProfiles, error: lookupError } = await supabase.rpc('kp_public_profiles');
+    if(lookupError) throw new Error('Не удалось найти аккаунты: '+lookupError.message);
+    let users = publicProfiles || {};
+    const {data:{session:publicLookupSession}}=await supabase.auth.getSession();
+    if(publicLookupSession){
+        try{
+            // A migrated Auth account may still have no JSON profile. Never
+            // discard reserved nicknames returned from kp_profiles.
+            users={...users,...((await get(ref(db,'users'))).val()||{})};
+        }catch(e){console.debug('[Kapani public lookup fallback]',e);}
+    }
     for(const [nick, u] of Object.entries(users)){
         const dn = normalizePublicName(displayNick(u));
         if(dn === q || normalizePublicName(u.referralCode) === q) return { nick, ...u };
@@ -3668,9 +3738,10 @@ function makeNickFromName(name){
 async function ensureUniqueNick(baseNick){
     let nick = baseNick;
     let i = 1;
+    const {data:publicProfiles,error:lookupError}=await supabase.rpc('kp_public_profiles');
+    if(lookupError) throw new Error('Не удалось проверить имя: '+lookupError.message);
     while(true){
-        const snap = await get(userRef(nick));
-        if(!snap.exists()) return nick;
+        if(!Object.hasOwn(publicProfiles||{},nick)) return nick;
         nick = `${baseNick.slice(0, 20)}_${i}`;
         i++;
         if(i > 99) return genId();
@@ -4253,14 +4324,17 @@ window.withdrawMunicipalTreasury=async function(){
 window.handleAuth = async function() {
     const nameInput = (qs('lgNick').value || '').trim();
     const password = (qs('lgPass').value || '');
+    const legacyEmail = String(qs('lgLegacyEmail')?.value || '').trim();
     const inviterInput = String(qs('lgInviter')?.value || '').trim();
     if(!nameInput) return toast('⚠️ Введите отображаемое имя','gold');
-    if(password.length < 8) return toast('⚠️ Пароль должен быть не короче 8 символов','gold');
+    if(!password) return toast('⚠️ Введите пароль','gold');
     const btn = qs('authBtn'); btn.disabled = true; btn.textContent = 'Подключение...';
     const resetBtn = () => { btn.disabled = false; btn.textContent = 'Войти / Создать аккаунт'; };
     try {
         const existing = await findUserByPublicName(nameInput);
         if(!existing) {
+            if(password.length < 8) throw new Error('Для нового аккаунта пароль должен быть не короче 8 символов');
+            if(legacyEmail) throw new Error('Старый аккаунт с таким именем не найден. Проверь имя, не создавай новый аккаунт вместо него.');
             const baseNick = makeNickFromName(nameInput);
             const nick = await ensureUniqueNick(baseNick);
             const now = Date.now();
@@ -4350,7 +4424,7 @@ window.handleAuth = async function() {
         } else {
             // Password verification must be performed by Supabase Auth, not by
             // comparing hashes downloaded from the public user tree.
-            await establishKapaniServerSession(existing.nick, password);
+            await establishKapaniServerSession(existing.nick, password, legacyEmail);
             toast('👋 С возвращением!','green');
             localStorage.setItem('kp_s', existing.nick);
             sessionStorage.setItem('kp_s', existing.nick);
@@ -4482,7 +4556,7 @@ window.logout = function() {
     try { localStorage.removeItem('kp_webpush_subscription_id'); } catch(e) {}
     window._kapaniWebPushSubscriptionId = null;
     try { localStorage.removeItem('kp_s'); sessionStorage.removeItem('kp_s'); localStorage.removeItem('kp_auth'); } catch(e) {}
-    currentNick = null; _kapaniSessionPassword = null; syncCurrentNick();
+    currentNick = null; _kapaniSessionPassword = null; kapaniLegacyLoginEmail = ''; kapaniVerifiedIdentity=null; syncCurrentNick();
     location.reload();
 };
 
@@ -5634,8 +5708,14 @@ window.testKapaniPush = async function(){
     toast(perm==='granted'?'🧪 Тестовое уведомление отправлено':'🧪 Уведомление добавлено в список. Разрешите push в браузере, чтобы видеть его как системное','green');
     return {...result, permission:perm, diagnostics: await window.getKapaniPushDiagnostics()};
 };
-window.deleteNotification=async function(notifId){await remove(ref(db,`users/${currentNick}/notifications/${notifId}`));};
-window.clearAllNotifications=async function(){await remove(notifRef(currentNick));toast('✅ Уведомления очищены','green');};
+window.deleteNotification=async function(notifId){
+    try { await manageOwnNotifications('delete',String(notifId)); }
+    catch(e){console.error('[notifications] delete failed',e);toast('Не удалось удалить уведомление: '+e.message,'red');}
+};
+window.clearAllNotifications=async function(){
+    try { await manageOwnNotifications('clear');toast('✅ Уведомления очищены','green'); }
+    catch(e){console.error('[notifications] clear failed',e);toast('Не удалось очистить уведомления: '+e.message,'red');}
+};
 function renderNotifications(notifs){
     const el=qs('inboxList');if(!el)return;
     const arr=Object.entries(notifs||{})
@@ -6114,11 +6194,6 @@ window.handleAvatarUpload=async function(e){
     const snap=await get(userRef(currentNick));
     const u=snap.val()||{};
     
-    // Check if account is verified
-    if(!u.accountVerified) {
-        return toast('❌ Ваш аккаунт не подтверждён мэрией. Подождите подтверждения.','red');
-    }
-    
     // Check if video - video avatars are no longer supported
     if(file.type.startsWith('video/')){
         return toast('❌ Видео-аватары больше не поддерживаются','red');
@@ -6126,10 +6201,11 @@ window.handleAvatarUpload=async function(e){
     
     // Image avatar
     const dataUrl=await compressImage(file,800,0.8);
-    await update(userRef(currentNick),{avatar:dataUrl});
+    try { await patchOwnProfile({avatar:dataUrl}); }
+    catch(err){ toast('Не удалось сохранить аватарку: '+err.message,'red'); return; }
     toggleAvatarMedia(qs('uAv'), qs('uAvVideo'), dataUrl);
     toggleAvatarMedia(qs('hAv'), qs('hAvVideo'), dataUrl);
-    if(!u.rewardedAvatar){await update(userRef(currentNick),{rewardedAvatar:true,taskBalance:Math.max(0,Number(u.taskBalance||0))+REWARD_CUSTOM_AVATAR});await logTx(currentNick,{type:'in',who:'Задания',amt:REWARD_CUSTOM_AVATAR,desc:'Одноразовое задание: своя аватарка'});toast(`🎁 +${REWARD_CUSTOM_AVATAR} ₽ на счёт заданий!`,'gold');}
+    if(!u.rewardedAvatar){await claimOneTimeTask('rewardedAvatar',REWARD_CUSTOM_AVATAR);}
     else toast('✅ Аватарка обновлена','green');
 };
 
@@ -6515,7 +6591,16 @@ window.saveProfileCustomization=async function(){
     void closeProfileCustomizer();
 };
 
-window.changeAvatarUrl=async function(){const url=prompt('Введите URL:');if(url&&url.startsWith('http')){const s=await get(userRef(currentNick));const u=s.val()||{};const patch={avatar:url};if(!u.rewardedAvatar&&!url.includes('flaticon')){patch.rewardedAvatar=true;patch.taskBalance=Math.max(0,Number(u.taskBalance||0))+REWARD_CUSTOM_AVATAR;await logTx(currentNick,{type:'in',who:'Задания',amt:REWARD_CUSTOM_AVATAR,desc:'Одноразовое задание: своя аватарка'});toast(`🎁 +${REWARD_CUSTOM_AVATAR} ₽ на счёт заданий!`,'gold');}await update(userRef(currentNick),patch);toast('🖼 Аватарка обновлена!','green');}};
+window.changeAvatarUrl=async function(){
+    const url=prompt('Введите URL изображения:');
+    if(url===null)return;
+    if(!/^https:\/\/\S+$/i.test(url))return toast('Нужна ссылка HTTPS','red');
+    try{
+        await patchOwnProfile({avatar:url});
+        if(!url.includes('flaticon'))await claimOneTimeTask('rewardedAvatar',REWARD_CUSTOM_AVATAR);
+        toast('🖼 Аватарка обновлена!','green');
+    }catch(e){toast('Не удалось сохранить аватарку: '+e.message,'red');}
+};
 window.changeDisplayName=async function(){
     const oldNick = currentNick;
     const snap = await get(userRef(oldNick));
@@ -6526,113 +6611,39 @@ window.changeDisplayName=async function(){
     if(v===null) return;
     const t = v.trim().slice(0,40);
     if(!t) return toast('⚠️ Имя не может быть пустым','gold');
-
-    const dup = await findUserByPublicName(t);
-    if(dup && dup.nick !== oldNick) return toast('❌ Это имя уже занято','red');
-
-    const newNick = makeNickFromName(t);
-    // Keep the storage key stable when the generated nickname would collide or
-    // differ only by unsupported characters. Otherwise migrate users/<nick>.
-    let targetNick = newNick || oldNick;
-    if(targetNick !== oldNick){
-        const existingTarget = await get(userRef(targetNick));
-        if(existingTarget.exists()) return toast('❌ Такой ник уже занят','red');
-    } else {
-        targetNick = oldNick;
-    }
-
-    const patch = {
-        displayName: t,
-        nick: targetNick,
-        passwordHashSalt: u.passwordHashSalt || oldNick
-    };
-
-    if(targetNick === oldNick){
-        await update(userRef(oldNick), patch);
-    } else {
-        // Rename the complete users/<oldNick> record so Firebase's visible
-        // users/ key and the user's `nick` field stay in sync.
-        const migrated = { ...u, ...patch };
-        await set(userRef(targetNick), migrated);
-        await remove(userRef(oldNick));
-
-        // Migrate the most important nick-keyed/user-owned branches.
-        const branchTasks = [
-            ['walls', false],
-            ['txLog', false]
-        ];
-        for(const [branch] of branchTasks){
-            try{
-                const oldRef = ref(db, `${branch}/${oldNick}`);
-                const oldBranch = await get(oldRef);
-                if(oldBranch.exists()){
-                    await set(ref(db, `${branch}/${targetNick}`), oldBranch.val());
-                    await remove(oldRef);
-                }
-            }catch(e){ console.warn(`[Kapani] ${branch} nick migration:`,e); }
-        }
-
-        try {
-            const bizSnap = await get(ref(db,'businesses'));
-            const businesses = bizSnap.val() || {};
-            for(const [bid,biz] of Object.entries(businesses)){
-                if(!biz || !biz.employees || !Object.prototype.hasOwnProperty.call(biz.employees, oldNick)) continue;
-                const emp = biz.employees[oldNick];
-                const nextBiz = {...biz, employees:{...biz.employees}};
-                delete nextBiz.employees[oldNick];
-                nextBiz.employees[targetNick] = emp;
-                await update(ref(db,`businesses/${bid}`), { employees: nextBiz.employees });
-            }
-        } catch(e){ console.warn('[Kapani] business nick migration:',e); }
-    }
-
-    // Update local identity immediately so the SPA does not require reload.
-    currentNick = targetNick;
-    syncCurrentNick();
-    localStorage.setItem('kp_s', targetNick);
-    sessionStorage.setItem('kp_s', targetNick);
+    // Supabase Auth login IDs and chat references use the immutable account
+    // key. Changing the public name must not copy or delete somebody's data.
+    // The public name is resolved to that stable key at login.
+    try { await patchOwnProfile({displayName:t}); }
+    catch(e){ return toast('Не удалось изменить имя: '+e.message,'red'); }
     try{
         const auth = JSON.parse(localStorage.getItem('kp_auth') || 'null') || {};
-        localStorage.setItem('kp_auth', JSON.stringify({...auth, nick:targetNick, name:t, displayName:t}));
+        localStorage.setItem('kp_auth', JSON.stringify({...auth, nick:oldNick, name:t, displayName:t}));
     }catch(e){}
-
-    // Rebind realtime listeners from users/<oldNick> to users/<newNick>.
-    try{
-        if(targetNick !== oldNick){
-            Object.values(listeners || {}).forEach(({ref:r,fn})=>{ try{ off(r,'value',fn); }catch(e){} });
-            listeners = {};
-            if(dmListeners.current){ try{ off(dmListeners.current.ref,'value',dmListeners.current.fn); }catch(e){} }
-            if(dmListeners.read){ try{ off(dmListeners.read.ref,'value',dmListeners.read.fn); }catch(e){} }
-            dmListeners = {};
-            attachListeners();
-        }
-    }catch(e){ console.warn('[Kapani] listener rebind after nick change:',e); }
-
-    const fresh = {...u, ...patch};
-    allUsersCache[targetNick] = fresh;
-    if(oldNick !== targetNick) delete allUsersCache[oldNick];
+    const fresh = {...u, displayName:t};
+    allUsersCache[oldNick] = fresh;
     window.allUsersCache = allUsersCache;
     updateHeader(fresh);
-    toast('✅ Имя, nick и запись users/ обновлены','green');
+    toast('✅ Имя обновлено. Идентификатор аккаунта сохранён','green');
 };
 window.changePassword=async function(){
-    const s = await get(userRef(currentNick));
-    if(!s.exists()) return;
-    const u = s.val() || {};
-    if(u.passwordHash){
-        const cur = prompt('Введите текущий пароль:');
-        if(cur===null) return;
-        const curHash = await hashPassword(cur, currentNick);
-        if(curHash !== u.passwordHash) return toast('❌ Текущий пароль введён неверно','red');
-    }
-    const next = prompt('Введите новый пароль (минимум 4 символа):');
+    // Passwords belong to Supabase Auth, never to the public user JSON.
+    const cur = prompt('Введите текущий пароль:');
+    if(cur===null)return;
+    if(!cur)return toast('Укажите текущий пароль','red');
+    const {data:identity,error:identityError}=await supabase.auth.getUser();
+    if(identityError || !identity?.user?.email) return toast('Сначала войдите в аккаунт повторно','red');
+    const {error:checkError}=await supabase.auth.signInWithPassword({email:identity.user.email,password:cur});
+    if(checkError)return toast('Текущий пароль неверный','red');
+    const next = prompt('Введите новый пароль (минимум 8 символов):');
     if(next===null) return;
-    if(String(next).length < 4) return toast('⚠️ Пароль должен быть не короче 4 символов','gold');
+    if(String(next).length < 8) return toast('⚠️ Пароль должен быть не короче 8 символов','gold');
     const confirmNext = prompt('Повторите новый пароль:');
     if(confirmNext===null) return;
     if(next !== confirmNext) return toast('❌ Пароли не совпадают','red');
-    const newHash = await hashPassword(next, currentNick);
-    await update(userRef(currentNick), { passwordHash: newHash });
+    const {error}=await supabase.auth.updateUser({password:next});
+    if(error)return toast('Не удалось сменить пароль: '+error.message,'red');
+    _kapaniSessionPassword=next;
     toast('✅ Пароль обновлён','green');
 };
 window.saveDisplayJob=async function(){
@@ -8055,9 +8066,7 @@ function renderWallFeed(data){
 }
 async function applyFirstWallReward(u){
     if(u.rewardedWall)return;
-    await update(userRef(currentNick),{rewardedWall:true,taskBalance:Math.max(0,Number(u.taskBalance||0))+REWARD_FIRST_WALL});
-    await logTx(currentNick,{type:'in',who:'Задания',amt:REWARD_FIRST_WALL,desc:'Одноразовое задание: первый пост в ленте'});
-    toast(`🎁 +${REWARD_FIRST_WALL} ₽ на счёт заданий за первый пост!`,'gold');
+    await creditTaskRewardOnce('rewardedWall',REWARD_FIRST_WALL,'Первый пост в ленте');
 }
 async function pushWallPostMedia(msgType,mediaData){
     const text=(qs('wallInput')?.value||'').trim();
@@ -8378,43 +8387,24 @@ async function checkDailyTaskCondition(taskId, u, ordersVal, marketVal, chatVal,
 }
 async function creditTaskRewardOnce(taskKey, reward, title, claimedKey, claimValue){
     if(!await requireNotMigrant('заработок через задания недоступен')) return false;
-    const safeReward = Math.max(0, Math.round(Number(reward) || 0));
-    if(!safeReward) return false;
-    const key = String(taskKey || '');
-    const result = await runTransaction(userRef(currentNick), current => {
-        if(current === null || isMigrantUser(current)) return;
-        if(current[key]) return;
-        const taskBalance = Math.max(0, Number(current.taskBalance || 0));
-        const next = { ...current, taskBalance: taskBalance + safeReward, [key]: claimValue === undefined ? true : claimValue };
-        if(claimedKey){
-            const claimed = Array.isArray(current[claimedKey]) ? current[claimedKey].slice() : [];
-            if(claimed.includes(String(claimValue))) return;
-            claimed.push(String(claimValue));
-            next[claimedKey] = claimed;
-        }
-        return next;
-    });
-    if(!result || !result.committed) return false;
-
-    // Update the local cache and visible balances immediately. Firebase's
-    // realtime listener will also reconcile the value, but the UI should not
-    // depend on a page reload or a later listener tick.
+    const dailyId = claimedKey ? String(claimValue || '') : '';
+    const kind = dailyId ? 'daily' : 'once';
+    const id = dailyId || String(taskKey || '');
     try {
-        const committed = result.snapshot?.val ? result.snapshot.val() : null;
-        if(committed){
-            allUsersCache[currentNick] = committed;
-            window.allUsersCache = allUsersCache;
-            const taskBalanceEl = qs('taskBalanceDisplay');
-            if(taskBalanceEl) taskBalanceEl.textContent = `${Math.max(0, Number(committed.taskBalance||0)).toLocaleString('ru-RU')} ₽`;
-            if(typeof updateHeader === 'function') updateHeader(committed);
-            if(typeof updateHeader_balance === 'function') updateHeader_balance(committed);
-        }
-    } catch(e){ console.warn('[tasks] immediate UI update:', e); }
-
-    await logTx(currentNick,{type:'in',who:'Задания',amt:safeReward,desc:title ? `Задание: ${title}` : `Задание выполнено`});
-    await pushNotification(currentNick, `🎁 +${safeReward}₽ на счёт заданий!`, 'money');
-    toast(`🎁 +${safeReward} ₽ на счёт заданий!`, 'green');
-    return true;
+        const result = await claimVerifiedTask(kind,id);
+        if(!result?.claimed)return false;
+        const fresh = (await get(userRef(currentNick))).val() || {};
+        allUsersCache[currentNick] = fresh;
+        window.allUsersCache = allUsersCache;
+        const taskBalanceEl = qs('taskBalanceDisplay');
+        if(taskBalanceEl) taskBalanceEl.textContent = `${Number(fresh.taskBalance||0).toLocaleString('ru-RU')} ₽`;
+        toast(`🎁 +${Number(result.reward||0)} ₽ на счёт заданий!`,'green');
+        return true;
+    } catch(e) {
+        console.warn('[tasks] server reward:',e);
+        toast('Награда не выдана: '+e.message,'red');
+        return false;
+    }
 }
 window.claimDailyTask = async function(taskId, reward, options={}){
     if(!currentNick) return;
@@ -8462,19 +8452,14 @@ window.withdrawTaskBalance = async function(){
     if(window._taskWithdrawBusy) return toast('⏳ Операция уже выполняется…','gold');
     window._taskWithdrawBusy = true;
     try{
-        const result = await runTransaction(userRef(currentNick), current => {
-            if(current === null) return;
-            const taskBalance = Math.max(0, Number(current.taskBalance || 0));
-            const mainBalance = Number(current.balance || 0);
-            if(taskBalance < amount) return;
-            return { ...current, taskBalance: taskBalance - amount, balance: mainBalance + amount };
-        });
-        if(!result || !result.committed){ toast('❌ Недостаточно средств на счёте заданий','red'); return; }
-        await logTx(currentNick,{type:'out',who:'Счёт заданий',amt:amount,desc:'Вывод заработка на основной баланс'});
-        await pushNotification(currentNick,`💰 ${amount}₽ переведено со счёта заданий на основной баланс`,'money');
+        const result = await withdrawVerifiedTasks(amount);
+        if(!result?.ok){ toast('❌ Недостаточно средств на счёте заданий','red'); return; }
         if(input) input.value='';
         toast(`✅ ${amount} ₽ переведено на основной баланс`,'green');
         renderTasks();
+    }catch(e){
+        console.warn('[tasks] withdrawal failed:',e);
+        toast('Не удалось вывести деньги: '+e.message,'red');
     }finally{ window._taskWithdrawBusy=false; }
 };
 
@@ -9018,7 +9003,8 @@ function renderLeaderboard(users){
     const frameHtml = frameClass
         ? `<div class="avatar-frame ${frameClass}" style="position:absolute;inset:-4px;border-radius:inherit;pointer-events:none;z-index:1;"></div>`
         : '';
-        return `<div class="lb-row" style="cursor:pointer;${u.nick===currentNick?'border-color:var(--primary);background:var(--pri-dim)':''}" onclick="openUserProfile('${escHtml(u.nick)}')"><div class="lb-rank">${medals[i]||`#${i+1}`}</div><div class="av-wrap-sm ${online?'online':''}" style="position:relative;">${frameHtml}<img class="lb-av" src="${escHtml(u.avatar||'')}" loading="lazy"><div class="online-dot"></div></div><div class="lb-info"><div class="lb-name">${escHtml(dn)}${u.nick===ADMIN?' 👑':''}</div><div class="lb-job" style="color:${online?'#22c55e':'var(--muted)'};">${online?'🟢 В сети':escHtml(getUserBusinessRoleLabel(u, u.nick || ''))}</div></div>${valHtml}</div>`;
+        const avatarSrc = u.avatar || u.avatarUrl || u.photoURL || DEFAULT_AVATAR_URL;
+        return `<div class="lb-row" style="cursor:pointer;${u.nick===currentNick?'border-color:var(--primary);background:var(--pri-dim)':''}" onclick="openUserProfile('${escHtml(u.nick)}')"><div class="lb-rank">${medals[i]||`#${i+1}`}</div><div class="av-wrap-sm ${online?'online':''}" style="position:relative;">${frameHtml}<img class="lb-av" src="${escHtml(avatarSrc)}" loading="lazy" onerror="this.onerror=null;this.src='${escHtml(DEFAULT_AVATAR_URL)}'"><div class="online-dot"></div></div><div class="lb-info"><div class="lb-name">${escHtml(dn)}${u.nick===ADMIN?' 👑':''}</div><div class="lb-job" style="color:${online?'#22c55e':'var(--muted)'};">${online?'🟢 В сети':escHtml(getUserBusinessRoleLabel(u, u.nick || ''))}</div></div>${valHtml}</div>`;
   };
 
   const lbEl=qs('lbList'); if(!lbEl) return;

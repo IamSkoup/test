@@ -10,6 +10,7 @@ const home=path.resolve(__dirname,'..');
 const html=fs.readFileSync(path.join(home,'index.html'),'utf8');
 const bridge=fs.readFileSync(path.join(home,'supabase-bridge.js'),'utf8');
 const migration=fs.readFileSync(path.join(home,'supabase/001_tree_bridge.sql'),'utf8');
+const accountFixes=fs.readFileSync(path.join(home,'supabase/002_account_and_tasks.sql'),'utf8');
 
 test('the site uses Supabase as the only active client data provider',()=>{
   assert.match(html,/from '\.\/supabase-bridge\.js'/);
@@ -17,6 +18,18 @@ test('the site uses Supabase as the only active client data provider',()=>{
   assert.match(bridge,/kp_tree_access/);
   assert.match(migration,/enable row level security/i);
   assert.match(migration,/Protected account field/);
+  assert.match(migration,/kp_public_profiles\(\)/);
+  assert.match(html,/supabase\.rpc\('kp_public_profiles'\)/);
+});
+
+test('legacy clients cannot directly mint currency or assign privileged roles',()=>{
+  assert.match(migration,/Replacing an entire user record is forbidden/);
+  assert.match(migration,/Protected operation: a dedicated server function is required/);
+  assert.match(migration,/subtree\[2\] <> all\(allowed_profile_fields\)/);
+  assert.match(migration,/subtree\[1\] <> actor_nick/);
+  assert.match(migration,/Not a DM participant/);
+  assert.match(migration,/kp_consume_notify_quota/);
+  assert.match(migration,/kp_push_events/);
 });
 
 test('media uploads use resumable TUS with progress and no Firebase Storage',()=>{
@@ -37,6 +50,86 @@ test('notification server integrates durable inbox and closed-site push',()=>{
   assert.match(edge,/getUser\(token\)/);
   assert.match(sw,/addEventListener\('push'/);
   assert.match(sw,/registration\.showNotification/);
+});
+
+test('notification removal cannot modify another inbox or fabricate notifications',()=>{
+  assert.match(html,/manageOwnNotifications\('delete',String\(notifId\)\)/);
+  assert.match(html,/manageOwnNotifications\('clear'\)/);
+  assert.doesNotMatch(html,/window\.clearAllNotifications=async function\(\)\{await remove\(/);
+  assert.match(accountFixes,/auth\.uid\(\)/);
+  assert.match(accountFixes,/public\.kp_profiles where user_id=auth\.uid\(\)/);
+  assert.match(accountFixes,/whole #- array\[nick,'notifications',p_notification_id\]/);
+  assert.match(accountFixes,/grant execute on function public\.kp_manage_notifications\(text,text\) to authenticated/);
+});
+
+test('profile editing and password changes use authenticated, narrowly scoped services',()=>{
+  assert.match(bridge,/kp_profile_patch/);
+  assert.match(accountFixes,/Protected account field: %/);
+  assert.match(accountFixes,/not \(k=any\(editable\)\)/);
+  const editable=(/editable constant text\[\]:=array\[([\s\S]*?)\];/.exec(accountFixes)||[])[1]||'';
+  assert.ok(editable.includes("'avatar'"));
+  assert.ok(!editable.includes("'balance'"));
+  assert.match(html,/supabase\.auth\.updateUser\(\{password:next\}\)/);
+  assert.doesNotMatch(html,/set\(userRef\(targetNick\), migrated\)/);
+  assert.match(html,/avatarSrc = u\.avatar \|\| u\.avatarUrl \|\| u\.photoURL \|\| DEFAULT_AVATAR_URL/);
+});
+
+test('legacy nick login uses supplied email and only reconstructs the authenticated owners missing profile',()=>{
+  assert.match(html,/id="lgLegacyEmail" type="email"/);
+  assert.match(html,/establishKapaniServerSession\(existing\.nick, password, legacyEmail\)/);
+  assert.match(html,/email:normalizedEmail\|\|await authEmail\(expectedNick\)/);
+  assert.match(html,/supabase\.rpc\('kp_ensure_my_profile'\)/);
+  assert.match(html,/kapaniVerifiedIdentity\?\.id===signedUser\.id/);
+  assert.doesNotMatch(html,/data\.user\.user_metadata\?\.nick\|\|currentNick/);
+  assert.match(html,/email:identity\.user\.email,password:cur/);
+  assert.match(accountFixes,/create or replace function public\.kp_ensure_my_profile\(\)/);
+  assert.match(accountFixes,/select nickname into nick from public\.kp_profiles where user_id=auth\.uid\(\)/);
+  assert.match(accountFixes,/if whole \? nick then/);
+  assert.match(accountFixes,/select balance into wallet_balance from public\.kp_wallets where user_id=auth\.uid\(\)/);
+  assert.match(accountFixes,/grant execute on function public\.kp_ensure_my_profile\(\) to authenticated/);
+  assert.match(accountFixes,/revoke all on function public\.kp_ensure_my_profile\(\) from public,anon/);
+});
+
+test('task rewards and cash-outs never accept a client-set balance',()=>{
+  assert.match(html,/claimVerifiedTask\(kind,id\)/);
+  assert.match(html,/withdrawVerifiedTasks\(amount\)/);
+  assert.match(accountFixes,/create or replace function public\.kp_claim_task/);
+  assert.match(accountFixes,/create or replace function public\.kp_withdraw_tasks/);
+  assert.match(accountFixes,/for update/);
+  assert.match(accountFixes,/update public\.kp_wallets set balance=balance\+p_amount/);
+  assert.match(accountFixes,/insert into public\.kp_ledger/);
+  assert.doesNotMatch(accountFixes,/reward:=p_/);
+});
+
+test('file protocol displays an actionable start instruction',()=>{
+  assert.match(html,/location\.protocol === 'file:'/);
+  assert.match(html,/start-kapani\.bat/);
+  assert.match(fs.readFileSync(path.join(home,'start-kapani.bat'),'utf8'),/python -m http\.server 8765/);
+});
+
+test('client routes profile and notification changes through owner-only procedures',async()=>{
+  const calls=[];
+  const sessionUser={id:'user-1'};
+  const client={
+    rpc:async(name,args)=>{calls.push({name,args});return {data:{ok:true},error:null};},
+    auth:{getUser:async()=>({data:{user:sessionUser},error:null})},
+    from:()=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:{nickname:'Кайон'},error:null})}),
+    channel:()=>({on(){return this;},subscribe(){return this;}}),removeChannel:()=>{}
+  };
+  const context={globalThis:{KAPANI_CONFIG:{supabase:{url:'https://example.supabase.co',anonKey:'sb_publishable_test'}}},
+    createClient:()=>client,crypto:webcrypto,TextEncoder,structuredClone,queueMicrotask,console,Math,Date};
+  const source=bridge.replace(/^import .*;$/m,'').replaceAll('export ','');
+  const sdk=vm.runInNewContext(`${source}\n({db,ref,update,manageOwnNotifications,claimVerifiedTask,withdrawVerifiedTasks})`,context);
+  await sdk.update(sdk.ref(sdk.db,'users/Кайон'),{avatar:'https://cdn.example/avatar.webp'});
+  await sdk.manageOwnNotifications('delete','n-123');
+  await sdk.manageOwnNotifications('clear');
+  await sdk.claimVerifiedTask('daily','chat');
+  await sdk.withdrawVerifiedTasks(500);
+  assert.deepEqual(calls.map(x=>x.name),[
+    'kp_profile_patch','kp_manage_notifications','kp_manage_notifications','kp_claim_task','kp_withdraw_tasks'
+  ]);
+  assert.equal(calls[0].args.p_patch.avatar,'https://cdn.example/avatar.webp');
+  assert.equal(calls[1].args.p_notification_id,'n-123');
 });
 
 test('Supabase path adapter creates firebase-compatible keys and query snapshots',async()=>{
