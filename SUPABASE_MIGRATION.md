@@ -108,24 +108,28 @@ ledger entry. No browser operation can choose reward amounts or directly set
 balances. The browser UI must still be published and two-account operations
 smoke-tested. Other finance and job features described above remain blocked.
 
-The database migration has already been run. Do not run it again merely to
-deploy the new frontend. Upload the updated static files to `/test/` with the
+The initial database migrations have already been run. Do not run them again merely to
+deploy the new frontend. Apply only new `006_auth_referrals.sql` if upgrading an existing
+installation, then upload the updated static files to `/test/` with the
 same relative directory layout. Existing `kp_*` accounts, wallets and messages
 were not deleted by the migration. If creating a fresh Supabase project, run
 the complete SQL in the editor with no selection (button "Run" rather than
 "Run selected").
 
 Registration now sees all nicknames reserved in `kp_profiles`, including old
-accounts whose profile document was never created. An existing Supabase Auth
-identity cannot safely be claimed or deleted via an ordinary signup; the owner
-must authenticate with the existing password and original Auth email. The
-login form includes an optional "Почта старого аккаунта" field. For «Кайон»,
-the authenticated account has an original Gmail address starting with "sa";
-use the full known email, not this hint, plus the existing password. On
-successful sign-in, `kp_ensure_my_profile()` creates its missing JSON user
-document only for the caller and keeps the canonical wallet balance.
-If the password is forgotten, recovery must be performed through the
-original email and Supabase Auth; never publish or share a password or JWT.
+accounts whose profile document was never created. Login and registration are
+separate flows: login never creates a new account. The UI accepts only nickname
+and password, with an optional inviter nickname available only on registration.
+The `kapani-push` Edge Function has a public `nickname-login` route: it securely
+resolves original Auth emails server-side for older accounts, asks Supabase Auth
+to verify the password, and returns session tokens without exposing the email.
+**Redeploy the updated `supabase/functions/kapani-push/index.ts`** with gateway
+JWT verification disabled, as for the original `register` route. Without this
+redeployment, older accounts using nonstandard Auth emails cannot sign in via
+nickname only. On successful sign-in, `kp_ensure_my_profile()` creates its
+missing JSON user document only for the caller and keeps the wallet balance.
+If the password is forgotten, recovery remains an administrator-assisted
+Supabase Auth task; never publish or share a password or JWT.
 Changing the public display name preserves the
 stable internal username so conversations, authentication and references are
 not orphaned. Login resolves the new display name to that original username.
@@ -151,3 +155,9 @@ Protected legacy operations not covered by the migration, including arbitrary
 business fees, salaries, savings interest and many cashier/casino commands,
 remain unavailable. Never relax row-level security to make those work; they
 need individually audited transactional server functions.
+
+`supabase/006_auth_referrals.sql` is a narrow follow-up migration for the
+optional inviter field. Apply it once in Supabase SQL Editor after 005. It
+validates that the inviter exists and isn't the new account before persisting
+referral fields with server-generated timestamps. Privileged fields supplied
+by the browser (including balances and jobs) continue to be discarded.

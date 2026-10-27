@@ -78,9 +78,9 @@ test('profile editing and password changes use authenticated, narrowly scoped se
   assert.match(html,/avatarSrc = u\.avatar \|\| u\.avatarUrl \|\| u\.photoURL \|\| DEFAULT_AVATAR_URL/);
 });
 
-test('legacy nick login uses supplied email and only reconstructs the authenticated owners missing profile',()=>{
-  assert.match(html,/id="lgLegacyEmail" type="email"/);
-  assert.match(html,/establishKapaniServerSession\(existing\.nick, password, legacyEmail\)/);
+test('nickname login needs no email and only reconstructs the authenticated owners missing profile',()=>{
+  assert.doesNotMatch(documentHtml,/id="lgLegacyEmail"/);
+  assert.match(html,/establishKapaniServerSession\(existing\.nick, password\)/);
   assert.match(html,/email:normalizedEmail\|\|await authEmail\(expectedNick\)/);
   assert.match(html,/supabase\.rpc\('kp_ensure_my_profile'\)/);
   assert.match(html,/kapaniVerifiedIdentity\?\.id===signedUser\.id/);

@@ -1,5 +1,5 @@
-// Deploy with legacy gateway JWT verification disabled. /register and /health
-// are public; every user-scoped endpoint validates the Supabase bearer JWT.
+// Deploy with legacy gateway JWT verification disabled. /register, /health and
+// /nickname-login are public; every user-scoped endpoint validates the bearer JWT.
 // Secrets: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT.
 import { createClient } from 'npm:@supabase/supabase-js@2.49.8';
 import webpush from 'npm:web-push@3.6.7';
@@ -80,6 +80,35 @@ async function registerAccount(request: Request, body: Record<string, unknown>) 
     await admin.auth.admin.deleteUser(userId);
     return json({ error:String((error as Error).message || error).slice(0,250) },500);
   }
+}
+
+// A legacy account can have an arbitrary private Auth email. Resolve it only
+// inside this service-role function and still let GoTrue verify the password.
+// No email or user id is returned to an unauthenticated caller.
+async function loginByNickname(body: Record<string, unknown>) {
+  const nick = String(body.nick || '').trim();
+  const password = String(body.password || '');
+  const invalid = () => json({ error:'Неверный ник или пароль' },401);
+  if (!nick || nick.length > 40 || !password || password.length > 128) return invalid();
+  const { data: profile, error: lookupError } = await admin.from('kp_profiles')
+    .select('user_id').eq('nickname',nick).maybeSingle();
+  if (lookupError) return json({ error:'Не удалось проверить аккаунт' },503);
+  if (!profile?.user_id) return invalid();
+  const { data: identity, error: identityError } = await admin.auth.admin.getUserById(profile.user_id);
+  if (identityError || !identity?.user?.email) return invalid();
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
+  if (!anonKey) return json({ error:'Авторизация временно недоступна' },503);
+  const response = await fetch(`${projectUrl}/auth/v1/token?grant_type=password`,{
+    method:'POST',
+    headers:{'content-type':'application/json',apikey:anonKey},
+    body:JSON.stringify({email:identity.user.email,password})
+  });
+  if (!response.ok) return invalid();
+  const tokens = await response.json();
+  if (tokens.user?.id !== profile.user_id || !tokens.access_token || !tokens.refresh_token) return invalid();
+  const result = json({access_token:tokens.access_token,refresh_token:tokens.refresh_token});
+  result.headers.set('cache-control','no-store');
+  return result;
 }
 
 async function sendTo(nick: string, data: Record<string, unknown>) {
@@ -182,6 +211,12 @@ Deno.serve(async request => {
     const payload=await request.json().catch(()=>null);
     if (!payload || typeof payload !== 'object') return json({ error:'Bad JSON' },400);
     return await registerAccount(request,payload);
+  }
+  if (action === 'nickname-login') {
+    if (request.method !== 'POST') return json({ error:'Use POST' },405);
+    const payload=await request.json().catch(()=>null);
+    if (!payload || typeof payload !== 'object') return json({ error:'Bad JSON' },400);
+    return await loginByNickname(payload);
   }
   const caller = await currentUser(request);
   if (!caller) return json({ error:'Unauthorized Supabase session' }, 401);

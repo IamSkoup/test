@@ -120,12 +120,28 @@ async function establishKapaniServerSession(nick, password, legacyEmail=''){
         const normalizedEmail=String(legacyEmail||'').trim().toLowerCase();
         if(normalizedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
             throw new Error('Укажи корректную почту старого аккаунта');
-        const {data,error}=await supabase.auth.signInWithPassword({
+        let {data,error}=await supabase.auth.signInWithPassword({
             email:normalizedEmail||await authEmail(expectedNick), password:secret
         });
-        if(error || !data?.session) throw new Error(normalizedEmail
-            ? 'Не удалось войти по старой почте и паролю: '+(error?.message||'нет сессии')
-            : 'Не удалось войти. Если аккаунт старый, впиши прежнюю почту: '+(error?.message||'нет сессии'));
+        // Older migrated profiles may have used a real email instead of the
+        // site's deterministic nickname email. Resolve that email privately
+        // on the server; it is never disclosed to the browser.
+        if((error || !data?.session) && !normalizedEmail && PUSH_WORKER_URL){
+            const response=await fetch(PUSH_WORKER_URL+'/nickname-login',{
+                method:'POST',
+                headers:{'content-type':'application/json',apikey:CONFIG.supabase.anonKey},
+                body:JSON.stringify({nick:expectedNick,password:secret})
+            });
+            if(response.ok){
+                const token=await response.json();
+                const restored=await supabase.auth.setSession({
+                    access_token:token.access_token,refresh_token:token.refresh_token
+                });
+                data=restored.data;
+                error=restored.error;
+            }
+        }
+        if(error || !data?.session) throw new Error('Неверный ник или пароль');
         const serverProfile=await supabase.from('kp_profiles').select('nickname').eq('user_id',data.user.id).maybeSingle();
         if(serverProfile.error || serverProfile.data?.nickname!==expectedNick){
             await supabase.auth.signOut();
@@ -1027,11 +1043,21 @@ window.toggleAuthPasswordVisibility = function(){
     const el = qs('lgPass');
     if(!el) return;
     el.type = el.type === 'password' ? 'text' : 'password';
+    const toggle = qs('authPasswordToggle');
+    if(toggle){
+        const showing = el.type === 'text';
+        toggle.classList.toggle('is-visible', showing);
+        toggle.setAttribute('aria-pressed', String(showing));
+        toggle.setAttribute('aria-label', showing ? 'Скрыть пароль' : 'Показать пароль');
+    }
 };
 async function findUserByPublicName(name){
     const q = normalizePublicName(name);
     if(!q) return null;
     if(allUsersCache && Object.keys(allUsersCache).length){
+        for(const [nick,u] of Object.entries(allUsersCache)){
+            if(normalizePublicName(nick) === q) return {nick,...u};
+        }
         for(const [nick, u] of Object.entries(allUsersCache)){
             const dn = normalizePublicName(displayNick(u));
             if(dn === q || normalizePublicName(u.referralCode) === q) return { nick, ...u };
@@ -1049,6 +1075,9 @@ async function findUserByPublicName(name){
             // discard reserved nicknames returned from kp_profiles.
             users={...users,...((await get(ref(db,'users'))).val()||{})};
         }catch(e){console.debug('[Kapani public lookup fallback]',e);}
+    }
+    for(const [nick, u] of Object.entries(users)){
+        if(normalizePublicName(nick) === q) return {nick,...u};
     }
     for(const [nick, u] of Object.entries(users)){
         const dn = normalizePublicName(displayNick(u));
@@ -1540,22 +1569,58 @@ window.withdrawMunicipalTreasury=async function(){
 };
 
 // ─── AUTH ─────────────────────────────────
+window.setAuthMode = function(mode){
+    const next = mode === 'register' ? 'register' : 'login';
+    const card = document.querySelector('#authSection .auth-card');
+    const btn = qs('authBtn');
+    if(!card || btn?.disabled || card.dataset.authMode === next) return;
+    card.dataset.authMode = next;
+    const isRegister = next === 'register';
+    qs('authTabLogin')?.classList.toggle('is-active', !isRegister);
+    qs('authTabRegister')?.classList.toggle('is-active', isRegister);
+    qs('authTabLogin')?.setAttribute('aria-selected', String(!isRegister));
+    qs('authTabRegister')?.setAttribute('aria-selected', String(isRegister));
+    const inviter = qs('lgInviterWrap');
+    if(inviter) inviter.hidden = !isRegister;
+    const password = qs('lgPass');
+    if(password){
+        password.value = '';
+        password.type = 'password';
+        password.autocomplete = isRegister ? 'new-password' : 'current-password';
+    }
+    const eye = qs('authPasswordToggle');
+    eye?.classList.remove('is-visible');
+    eye?.setAttribute('aria-pressed', 'false');
+    eye?.setAttribute('aria-label', 'Показать пароль');
+    const label = btn?.querySelector('.auth-submit-label');
+    if(label) label.textContent = isRegister ? 'Создать аккаунт' : 'Войти';
+};
 window.handleAuth = async function() {
     const nameInput = (qs('lgNick').value || '').trim();
     const password = (qs('lgPass').value || '');
-    const legacyEmail = String(qs('lgLegacyEmail')?.value || '').trim();
-    const inviterInput = String(qs('lgInviter')?.value || '').trim();
-    if(!nameInput) return toast('⚠️ Введите отображаемое имя','gold');
+    const mode = document.querySelector('#authSection .auth-card')?.dataset.authMode || 'login';
+    const inviterInput = mode === 'register' ? String(qs('lgInviter')?.value || '').trim() : '';
+    if(!nameInput) return toast('⚠️ Введите ник','gold');
     if(!password) return toast('⚠️ Введите пароль','gold');
-    const btn = qs('authBtn'); btn.disabled = true; btn.textContent = 'Подключение...';
-    const resetBtn = () => { btn.disabled = false; btn.textContent = 'Войти / Создать аккаунт'; };
+    const btn = qs('authBtn');
+    if(btn.disabled) return;
+    const label = btn.querySelector('.auth-submit-label');
+    btn.disabled = true;
+    btn.classList.add('is-loading');
+    if(label) label.textContent = 'Подключение…';
+    const resetBtn = () => {
+        btn.disabled = false;
+        btn.classList.remove('is-loading');
+        if(label) label.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
+    };
     try {
         const existing = await findUserByPublicName(nameInput);
-        if(!existing) {
+        if(mode === 'register') {
+            if(existing) throw new Error('Этот ник уже занят');
+            if(!/^[a-zA-Zа-яА-ЯёЁ0-9_-]{3,24}$/.test(nameInput))
+                throw new Error('Ник должен содержать 3–24 символа: буквы, цифры, _ или -');
             if(password.length < 8) throw new Error('Для нового аккаунта пароль должен быть не короче 8 символов');
-            if(legacyEmail) throw new Error('Старый аккаунт с таким именем не найден. Проверь имя, не создавай новый аккаунт вместо него.');
-            const baseNick = makeNickFromName(nameInput);
-            const nick = await ensureUniqueNick(baseNick);
+            const nick = nameInput;
             const now = Date.now();
             // New accounts are owned by Supabase Auth; the database never stores
             // a browser-readable password hash.
@@ -1565,15 +1630,11 @@ window.handleAuth = async function() {
                 const candidate = await findUserByPublicName(inviterInput);
                 if(!candidate){
                     resetBtn();
-                    return toast('❌ Рекламщик с таким именем или кодом не найден','red');
+                    return toast('❌ Пользователь с таким ником не найден','red');
                 }
                 if(candidate.nick === nick){
                     resetBtn();
                     return toast('❌ Нельзя указать себя пригласившим','red');
-                }
-                if(!hasMunicipalJob(candidate, JOB_ADVERTISER)){
-                    resetBtn();
-                    return toast('❌ Указанный пользователь сейчас не работает рекламщиком','red');
                 }
                 advertiserReferrer = { nick:candidate.nick, displayName:displayNick(candidate) || candidate.nick };
             }
@@ -1630,7 +1691,6 @@ window.handleAuth = async function() {
             syncCurrentNick();
             await ensureAuth();
             if(advertiserReferrer){
-                await incrementAdvertiserReferralCount(advertiserReferrer.nick);
                 try {
                     await pushNotification(advertiserReferrer.nick, `📢 Новый приглашённый: ${nameInput} зарегистрировался по вашей рекомендации`, 'system');
                 } catch(e){ console.warn('[advertiser referral notification]', e); }
@@ -1641,9 +1701,10 @@ window.handleAuth = async function() {
             toast('🎉 Добро пожаловать в Капани! Ваш аккаунт ожидает подтверждения мэрией.','green');
             startApp();
         } else {
+            if(!existing) throw new Error('Аккаунт с таким ником не найден');
             // Password verification must be performed by Supabase Auth, not by
             // comparing hashes downloaded from the public user tree.
-            await establishKapaniServerSession(existing.nick, password, legacyEmail);
+            await establishKapaniServerSession(existing.nick, password);
             toast('👋 С возвращением!','green');
             localStorage.setItem('kp_s', existing.nick);
             sessionStorage.setItem('kp_s', existing.nick);
