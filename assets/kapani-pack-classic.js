@@ -581,7 +581,12 @@ ready(function(){
     const photo = qs('rlPhoto')?.value.trim();
     if(!title || !price || !desc) return toast('⚠️ Заполните название, цену, описание','gold');
     const id = 'rl_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
-    await set(marketRentRef(id), { id, owner: window.currentNick, title, price, address, desc, photo, status:'active', createdAt: Date.now() });
+    try{
+      const {error}=await window.kapaniSupabase.rpc('kp_rent_listing_action',{
+        p_action:'create',p_listing_id:id,p_payload:{title,price,address,desc,photo}
+      });
+      if(error)throw error;
+    }catch(e){console.error('[rent create]',e);return toast('❌ '+(e?.message||'Ошибка аренды'),'red');}
     toast('✅ Объявление об аренде опубликовано','green');
     qs('rlTitle').value=''; qs('rlPrice').value=''; qs('rlAddress').value=''; qs('rlDesc').value=''; qs('rlPhoto').value='';
     renderRentListingsOnMarket();
@@ -628,7 +633,12 @@ ready(function(){
   }
   window.removeRentListing = async function(id){
     if(!confirm('Снять объявление?')) return;
-    await remove(marketRentRef(id));
+    try{
+      const {error}=await window.kapaniSupabase.rpc('kp_rent_listing_action',{
+        p_action:'delete',p_listing_id:id
+      });
+      if(error)throw error;
+    }catch(e){console.error('[rent delete]',e);return toast('❌ '+(e?.message||'Ошибка аренды'),'red');}
     renderRentListingsOnMarket();
   };
 

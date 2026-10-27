@@ -1130,9 +1130,9 @@ async function syncUserEmployments(nick, u){
     return emps;
 }
 async function canTakeAnotherJob(u, nick){
-    await syncUserEmployments(nick, u);
-    const fresh = (await get(userRef(nick))).val() || u;
-    return countActiveEmployments(fresh, nick) < getJobLimit(fresh);
+    // Reading a job limit must not try to rewrite the protected employment
+    // record. Only an authenticated server operation can change employments.
+    return countActiveEmployments(u, nick) < getJobLimit(u);
 }
 function applyBizBgEffect(el, effectId){
     if(!el) return;
@@ -2098,12 +2098,12 @@ async function refreshUsersStructure(){
 const LIVE_PAGE_BINDINGS={
     news:{q:()=>[newsRef()],render:()=>window.renderNews&&window.renderNews()},
     rentBuildings:{q:()=>[rentBuildingsRef()],render:()=>window.renderRentBuildings&&window.renderRentBuildings()},
-    hospital:{q:()=>[ref(db,'hospital')],render:()=>renderHospital()},
+    hospital:{q:()=>[],render:()=>renderHospital()},
     hospitalPanel:{q:()=>[ref(db,'hospital')],render:()=>renderHospitalPanel()},
     deputySession:{q:()=>[deputyProposalsRef()],render:()=>renderDeputyProposals()},
     events:{q:()=>[racesRef(),raceDayGroupsRef()],render:()=>window.renderEventsSection&&window.renderEventsSection()},
     jobs:{q:()=>[appsRef()],render:()=>window.renderJobAppStatus&&window.renderJobAppStatus()},
-    taxi:{q:()=>[query(ref(db,'taxiHistory'),orderByChild('client'),equalTo(currentNick))],render:()=>renderTaxiHistory()},
+    taxi:{q:()=>[],render:()=>renderTaxiHistory()},
     deliveryOrderPage:{q:()=>[deliveryCustomOrdersRef()],render:()=>renderMyDeliveryOrders()},
     janitorPage:{q:()=>[janitorSubsRef()],render:()=>renderJanitorPage()},
     profile:{q:()=>[wallRef(currentNick)],render:(snap)=>renderWallFeed((snap&&snap.val&&snap.val())||{})}
@@ -3263,8 +3263,9 @@ async function renderTaxiHistory(){
     const card=qs('taxiHistory'),list=qs('taxiHistoryList');
     if(!card||!list||!currentNick) return;
     try{
-        const snap=await get(query(ref(db,'taxiHistory'),orderByChild('client'),equalTo(currentNick)));
-        const arr=Object.entries(snap.val()||{}).map(([id,o])=>({...o,id})).sort((a,b)=>(b.completedAt||b.createdAt||0)-(a.completedAt||a.createdAt||0)).slice(0,20);
+        const {data,error}=await supabase.rpc('kp_my_taxi_history');
+        if(error)throw error;
+        const arr=Object.entries(data||{}).map(([id,o])=>({...o,id})).sort((a,b)=>(b.completedAt||b.createdAt||0)-(a.completedAt||a.createdAt||0)).slice(0,20);
         card.style.display=arr.length?'block':'none';
         if(!arr.length){list.innerHTML='';return;}
         list.innerHTML=arr.map(o=>{
@@ -4603,7 +4604,10 @@ window.doTransfer = async function(){
         if(qs('bTo'))qs('bTo').value='';
         if(qs('bAmt'))qs('bAmt').value='';
         if(allUsersCache[currentNick])allUsersCache[currentNick].balance=Number(data.balance);
-        await pushNotification(to,`💰 Перевод ${amt}₽ от ${currentNick}`,'money');
+        _accountTransactionsCache=null;
+        _accountTransactionsAt=0;
+        try{await pushNotification(to,`💰 Перевод ${amt}₽ от ${currentNick}`,'money');}
+        catch(notificationError){console.warn('[bank transfer notification]',notificationError);}
         toast(`💸 ${amt}₽ → ${displayNick(toUser)} (комиссия ${Number(data.commission||0)}₽)`,'green');
         renderRecentTransfers();renderFinancialStats();
     }catch(e){
@@ -4680,9 +4684,27 @@ window.doTransfer = async function(){
         if(btn){ btn.disabled = false; btn.textContent = 'Отправить'; }
     }
 };
+let _accountTransactionsCache=null;
+let _accountTransactionsAt=0;
+let _accountTransactionsRequest=null;
+async function getAccountTransactions(force=false){
+    if(!force&&_accountTransactionsCache&&Date.now()-_accountTransactionsAt<3000) return _accountTransactionsCache;
+    if(_accountTransactionsRequest) return _accountTransactionsRequest;
+    _accountTransactionsRequest=(async()=>{
+        const {data,error}=await supabase.rpc('kp_my_transactions');
+        if(error) throw error;
+        if(!Array.isArray(data)) throw new Error('Банк вернул неправильный формат истории');
+        _accountTransactionsCache=data;
+        _accountTransactionsAt=Date.now();
+        return data;
+    })().finally(()=>{_accountTransactionsRequest=null;});
+    return _accountTransactionsRequest;
+}
 async function renderRecentTransfers(){
-    const el=qs('txHistory');if(!el)return;const snap=await get(txLogRef(currentNick));
-    const arr=Object.values(snap.val()||{}).sort((a,b)=>(b.ts||'').localeCompare(a.ts||'')).slice(0,5);
+    const el=qs('txHistory');if(!el)return;
+    let arr;
+    try {arr=(await getAccountTransactions()).slice().sort((a,b)=>String(b.ts||'').localeCompare(String(a.ts||''))).slice(0,5);}
+    catch(e){console.error('[bank history]',e);el.textContent='Не удалось загрузить историю: '+(e.message||e);return;}
     el.innerHTML=arr.length===0?'<div style="color:var(--muted);font-size:13px;">Нет операций</div>':arr.map(tx=>{
         const whoLine = tx.who ? (tx.type==='in' ? 'От: '+escHtml(tx.who) : '→ '+escHtml(tx.who)) : '';
         const descLine = tx.desc ? escHtml(tx.desc) : (tx.who ? '' : (tx.type==='in'?'Поступление':'Списание'));
@@ -4786,8 +4808,9 @@ window.submitAtmRequest = async function(){
 
 
 window.renderFinancialStats=async function(){
-    const snap=await get(txLogRef(currentNick));
-    const all=Object.values(snap.val()||{});
+    let all;
+    try{all=await getAccountTransactions();}
+    catch(e){console.error('[bank stats]',e);['monthlyStats','totalStats'].forEach(id=>{if(qs(id))qs(id).textContent='Не удалось загрузить статистику';});return;}
     
     // Группировка по месяцам
     const byMonth={};
@@ -4867,7 +4890,9 @@ window.openHistoryModal=async function(){
     sheet.addEventListener('touchend', onTouchEnd, {passive:true});
     modal._swipeCleanup = () => { sheet.removeEventListener('touchstart', onTouchStart); sheet.removeEventListener('touchend', onTouchEnd); };
 
-    const snap=await get(txLogRef(currentNick));const all=Object.values(snap.val()||{}).sort((a,b)=>(b.ts||'').localeCompare(a.ts||''));
+    let all;
+    try{all=(await getAccountTransactions()).slice().sort((a,b)=>String(b.ts||'').localeCompare(a.ts||''));}
+    catch(e){console.error('[bank history modal]',e);qs('historyList').textContent='Не удалось загрузить историю: '+(e.message||e);return;}
     const income=all.filter(t=>t.type==='in').reduce((s,t)=>s+(t.amt||0),0);const expense=all.filter(t=>t.type==='out').reduce((s,t)=>s+(t.amt||0),0);
     qs('historySummary').innerHTML=`<div class="history-sum-box income"><div class="history-sum-val" style="color:var(--primary);">+${income.toLocaleString()}₽</div><div class="history-sum-lbl">Получено</div></div><div class="history-sum-box expense"><div class="history-sum-val" style="color:var(--red);">−${expense.toLocaleString()}₽</div><div class="history-sum-lbl">Списано</div></div>`;
     if(all.length===0){qs('historyList').innerHTML='<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0;">Пусто</div>';return;}
@@ -6102,43 +6127,51 @@ window.publishListing=async function(){
     
     const photo=window._mktPhotoData||qs('mktPhoto').value.trim();
     const id=genId();
-    await set(listingRef(id),{id,seller:currentNick,title,desc:qs('mktDesc').value.trim(),price,priceNegotiable:cat!=='work' && !!negotiable,salaryHint,photo,category:cat,status:'active',buyer:null});
-    
-    // Обновляем счетчик объявлений
-    await update(userRef(currentNick),{
-        listingsThisWeek: actualListingsThisWeek+1,
-        lastListingWeek: currentWeek
-    });
-    
+    if(!await marketMutation('create',id,{title,desc:qs('mktDesc').value.trim(),
+        price,priceNegotiable:cat!=='work' && !!negotiable,salaryHint,photo,category:cat})) return;
     if(!u.rewardedListing){
-        await update(userRef(currentNick),{rewardedListing:true,taskBalance:Math.max(0,Number(u.taskBalance||0))+60});
-        await logTx(currentNick,{type:'in',who:'Задания',amt:60,desc:'Одноразовое задание: первое объявление'});
-        toast('🎁 +60 ₽ на счёт заданий за первое объявление','gold');
+        const {data,error}=await supabase.rpc('kp_claim_migrated_once',{p_task_id:'rewardedListing'});
+        if(error) console.warn('[market reward]',error);
+        else if(data?.claimed) toast('🎁 +60 ₽ на счёт заданий за первое объявление','gold');
     }
     qs('mktTitle').value='';qs('mktDesc').value='';qs('mktPrice').value='';if(qs('mktNegotiable'))qs('mktNegotiable').checked=false;if(qs('mktSalaryHint'))qs('mktSalaryHint').value='';
     qs('mktPhoto').value='';qs('mktPhotoPreview').style.display='none';window._mktPhotoData=null;toggleMktPriceFields();toast('✅ Опубликовано!','green');switchMarketTab(0);
 };
+async function marketMutation(action,id,payload={}){
+    try{
+        const {data,error}=await supabase.rpc('kp_market_action',{
+            p_action:action,p_listing_id:id,p_payload:payload
+        });
+        if(error)throw error;
+        if(!data?.ok)throw new Error('Не удалось выполнить действие');
+        return data;
+    }catch(e){
+        console.error('[Kapani market '+action+']',e);
+        toast('❌ Маркет: '+(e?.message||'Ошибка сервера'),'red');
+        return null;
+    }
+}
 window.requestMeeting=async function(id){
     if(!await requireMarketTaxiAccess()) return;
     const snap=await get(listingRef(id));if(!snap.exists())return toast('❌ Листинг не найден','red');
     const meSnap = await get(userRef(currentNick)); const me = meSnap.val()||{};
     if(isMigrantUser(me)) return toast(`🚫 ${ROLE_MIGRANT}: маркетплейс недоступен`,'red');
     const l=snap.val();
-    await update(listingRef(id),{status:'meeting_requested',buyer:currentNick});
+    if(!await marketMutation('request',id))return;
     const pl=l.priceNegotiable?'договорная':`${l.price}₽`;
     await pushNotification(l.seller,`🤝 Купить хочет: ${currentNick} · "${l.title}" · ${pl}`,'market');
     toast('✉️ Запрос отправлен!','green');
 };
-window.confirmMeeting=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();await update(listingRef(id),{status:'meeting_confirmed'});await pushNotification(l.buyer,`✅ ${l.seller} подтвердил встречу!`,'market');toast('✅ Встреча подтверждена','green');};
-window.cancelMeeting=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();const otherNick=l.buyer===currentNick?l.seller:l.buyer;await update(listingRef(id),{status:'active',buyer:null});if(otherNick)await pushNotification(otherNick,`⚠️ ${currentNick} отказался от сделки`,'market');toast('❌ Отказ от встречи','red');};
+window.confirmMeeting=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();if(!await marketMutation('confirm',id))return;await pushNotification(l.buyer,`✅ ${l.seller} подтвердил встречу!`,'market');toast('✅ Встреча подтверждена','green');};
+window.cancelMeeting=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();const otherNick=l.buyer===currentNick?l.seller:l.buyer;if(!await marketMutation('cancel',id))return;if(otherNick)await pushNotification(otherNick,`⚠️ ${currentNick} отказался от сделки`,'market');toast('❌ Отказ от встречи','red');};
 window.goToChat=function(nick){navTo('messages');setTimeout(()=>{switchMsgTab(1);setTimeout(()=>openDmChat(nick),200);},200);};
-window.declineListing=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();await update(listingRef(id),{status:'active',buyer:null});await pushNotification(l.buyer,`❌ ${l.seller} отказал`,'market');toast('❌ Отклонено','red');};
+window.declineListing=async function(id){const snap=await get(listingRef(id));if(!snap.exists())return;const l=snap.val();if(!await marketMutation('decline',id))return;await pushNotification(l.buyer,`❌ ${l.seller} отказал`,'market');toast('❌ Отклонено','red');};
 window.confirmPurchase=async function(id){
     if(!await requireMarketTaxiAccess()) return;
     const snap=await get(listingRef(id));if(!snap.exists())return;
     const l=snap.val();
     if(l.category==='work'){
-        await update(listingRef(id),{status:'active',buyer:null,workAcceptedBy:currentNick,workAcceptedAt:Date.now()});
+        if(!await marketMutation('purchase',id,{amount:0}))return;
         await pushNotification(l.seller,`🧑‍💼 ${currentNick} подтвердил вакансию «${l.title}»`,'market');
         toast('✅ Вакансия подтверждена','green');
         return;
@@ -6146,31 +6179,18 @@ window.confirmPurchase=async function(id){
     const isService=l.category==='service';
     const pay=l.priceNegotiable?parseInt(prompt('Сколько ₽ перевести продавцу?','0')||'0',10)||0:(l.price||0);
     if(pay<0)return toast('⚠️ Сумма','gold');
-    const[bSnap,sSnap]=await Promise.all([get(userRef(l.buyer)),get(userRef(l.seller))]);
-    if(!bSnap.exists()||!sSnap.exists())return;
-    const fee = calcCommission(pay, ECONOMY_MARKET_COMMISSION);
-    const total = pay + fee;
-    if(total>0 && (bSnap.val().balance||0) < total)return toast(`❌ Недостаточно средств. Нужно ${total}₽ (комиссия ${fee}₽)`,'red');
-    if(total>0){
-        await update(userRef(l.buyer),{balance:(bSnap.val().balance||0)-total});
-        await update(userRef(l.seller),{balance:(sSnap.val().balance||0)+pay});
-        await logTx(l.buyer,{type:'out',who:l.seller,amt:pay,desc:`Куплено${isService?' услуга':' объявление'} «${l.title}»`});
-        if(fee>0) await logTx(l.buyer,{type:'out',who:'Комиссия',amt:fee,desc:`Комиссия 2% за покупку «${l.title}»`});
-        await logTx(l.seller,{type:'in',who:l.buyer,amt:pay,desc:`Продано${isService?' услуга':' объявление'} «${l.title}»`});
-        if(!bSnap.val().rewardedMarket){
-            await update(userRef(l.buyer),{rewardedMarket:true,taskBalance:Math.max(0,Number(bSnap.val().taskBalance||0))+90});
-            await logTx(l.buyer,{type:'in',who:'Задания',amt:90,desc:'Одноразовое задание: покупка на маркетплейсе'});
-            await pushNotification(l.buyer,'🎁 +90 ₽ на счёт заданий за покупку на маркетплейсе','money');
-        }
-    }
+    const result=await marketMutation('purchase',id,{amount:pay});
+    if(!result)return;
+    const fee=Number(result.commission||0);
+    const {data:reward,error:rewardError}=await supabase.rpc('kp_claim_migrated_once',{p_task_id:'rewardedMarket'});
+    if(rewardError) console.warn('[market purchase reward]',rewardError);
+    else if(reward?.claimed) toast('🎁 +90 ₽ на счёт заданий за покупку','gold');
     // Service listings stay active forever — just reset buyer
     if(isService){
-        await update(listingRef(id),{status:'active',buyer:null});
         await pushNotification(l.seller,`💰 ${l.buyer} заказал услугу "${l.title}"${pay?` — ${pay}₽`:''}${fee?` (+${fee}₽ комиссия)`:''}`,'market');
         await pushNotification(l.buyer,`✅ Услуга "${l.title}" подтверждена! Комиссия: ${fee}₽`,'market');
         toast('🎉 Услуга заказана!','green');
     } else {
-        await update(listingRef(id),{status:'sold'});
         await pushNotification(l.seller,`💰 ${l.buyer} купил "${l.title}"${pay?` — ${pay}₽`:''}${fee?` (+${fee}₽ комиссия)`:''}`,'market');
         await pushNotification(l.buyer,`✅ Покупка "${l.title}" подтверждена! Комиссия: ${fee}₽`,'market');
         toast('🎉 Покупка!','green');
@@ -6184,16 +6204,8 @@ window.pinListing=async function(id){
     if(l.seller!==currentNick) return toast('❌ Нет прав','red');
     if(l.archived) return toast('❌ Сначала восстановите объявление','red');
     if((l.pinnedUntil || 0) > Date.now()) return toast('⭐ Уже закреплено','gold');
-    const uSnap = await get(userRef(currentNick));
-    const u = uSnap.val() || {};
-    const hasPrimePin = u.subscription === 'prime' && u.subscriptionExpiry && new Date(u.subscriptionExpiry) > new Date();
-    const pinPrice = hasPrimePin ? 0 : ECONOMY_MARKET_PIN_PRICE;
-    const pinLabel = hasPrimePin ? 'ХИТ ПРОДАЖ!' : 'Лидер продаж!';
-    if((u.balance || 0) < pinPrice) return toast(`❌ Нужно ${pinPrice}₽ для закрепления`,'red');
-    if(pinPrice > 0) await update(userRef(currentNick), { balance: (u.balance || 0) - pinPrice });
-    await update(listingRef(id), { pinnedUntil: Date.now() + ECONOMY_MARKET_PIN_DURATION_MS, pinnedBy: currentNick, pinnedLabel: pinLabel });
-    if(pinPrice > 0) await logTx(currentNick, { type:'out', who:'Маркетплейс', amt:pinPrice, desc:`Закрепление объявления «${l.title}»` });
-    await pushNotification(currentNick, `📌 Объявление «${l.title}» закреплено как «${pinLabel}»`, 'market');
+    if(!await marketMutation('pin',id))return;
+    await pushNotification(currentNick, `📌 Объявление «${l.title}» закреплено`, 'market');
     toast('📌 Объявление закреплено!', 'green');
     get(marketRef()).then(s=>renderMarket(s.val()||{}));
 };
@@ -6206,10 +6218,8 @@ window.promoteBusiness=async function(bizId){
     const b = bSnap.val();
     if(b.owner !== currentNick) return toast('❌ Нет прав','red');
     if(Number(b.promotedUntil||0) > Date.now()) return toast('🔥 Бизнес уже в ТОПе','gold');
-    if((u.balance || 0) < ECONOMY_BUSINESS_PROMOTE_PRICE) return toast(`❌ Нужно ${ECONOMY_BUSINESS_PROMOTE_PRICE}₽ для продвижения`,'red');
-    await update(userRef(currentNick), { balance: (u.balance || 0) - ECONOMY_BUSINESS_PROMOTE_PRICE });
-    await update(bizItemRef(bizId), { promotedUntil: Date.now() + ECONOMY_BUSINESS_PROMOTE_DURATION_MS });
-    await logTx(currentNick, { type:'out', who:'Бизнес', amt:ECONOMY_BUSINESS_PROMOTE_PRICE, desc:`Продвижение «${b.name}» в ТОП` });
+    const {error}=await supabase.rpc('kp_business_promote',{p_business_id:bizId});
+    if(error){console.error('[business promote]',error);return toast('❌ '+error.message,'red');}
     await pushNotification(currentNick, `🔥 Бизнес «${b.name}» продвинут в ТОП на 7 дней!`, 'money');
     toast('🔥 Бизнес продвинут в ТОП!', 'green');
     renderBusinesses();
@@ -6220,7 +6230,7 @@ window.deleteListing=async function(id){
     const l=snap.val();
     if(l.seller!==currentNick)return toast('❌ Нет прав','red');
     if(!confirm('Удалить объявление навсегда?'))return;
-    await remove(listingRef(id));
+    if(!await marketMutation('delete',id))return;
     toast('🗑 Удалено','gold');
 };
 window.archiveListing=async function(id){
@@ -6228,7 +6238,7 @@ window.archiveListing=async function(id){
     if(!snap.exists())return toast('❌ Объявление не найдено','red');
     const l=snap.val();
     if(l.seller!==currentNick)return toast('❌ Нет прав','red');
-    await update(listingRef(id),{archived:true,archivedAt:Date.now()});
+    if(!await marketMutation('archive',id))return;
     toast('🕓 Объявление скрыто','gold');
     get(marketRef()).then(snap=>renderMarket(snap.val()||{}));
 };
@@ -6237,7 +6247,7 @@ window.restoreListing=async function(id){
     if(!snap.exists())return toast('❌ Объявление не найдено','red');
     const l=snap.val();
     if(l.seller!==currentNick)return toast('❌ Нет прав','red');
-    await update(listingRef(id),{archived:null,archivedAt:null});
+    if(!await marketMutation('restore',id))return;
     toast('↩ Объявление восстановлено','green');
     get(marketRef()).then(snap=>renderMarket(snap.val()||{}));
 };
@@ -6285,7 +6295,7 @@ window.sendApp=async function(){
     if(hasMunicipalJob(u, target)) return toast('⚠️ Вы уже работаете на этой должности','gold');
     if(!await canTakeAnotherJob(u, currentNick)) return toast(`⚠️ Лимит работ: ${getJobLimit(u)}. Увольтесь с одной работы или оформите подписку.`,'gold');
     const kveScore = (u.kveScore !== undefined && u.kveScore !== null) ? Number(u.kveScore) : null;
-    const KVE_REQUIREMENTS={'Водитель':60,'Доставщик':53,'Уборщик':40,'Журналист':71,'КСБ':90,'Депутат':95,'Врач':90,'Помощник врача':80,'Рекламщик':50};
+    const KVE_REQUIREMENTS={'Водитель':60,'Доставщик':53,'Уборщик':40,'Журналист':71,'КСБ':90,'Депутат':95,'Полицейский':80,'Врач':90,'Помощник врача':80,'Рекламщик':50};
     const required=KVE_REQUIREMENTS[target]||0;
     if(kveScore===null){
         return toast('📝 У вас ещё нет результата КВЭ. Дождитесь выставления балла мэрией.','gold');
@@ -6298,7 +6308,10 @@ window.sendApp=async function(){
     const already=Object.values(apps).some(a=>a.from===currentNick&&a.status==='new');
     if(already)return toast('⚠️ Заявка уже есть','gold');
     const id=genId();
-    await set(appRef(id),{id,from:currentNick,target,status:'new',appText,kveScore,createdAt:Date.now()});
+    const {error}=await supabase.rpc('kp_job_application',{
+        p_action:'submit',p_app_id:id,p_target:target,p_text:appText
+    });
+    if(error){console.error('[job application submit]',error);return toast('❌ '+error.message,'red');}
     await pushNotification(currentNick,`📝 Заявка на "${target}" отправлена`,'system');
     toast('📝 Отправлено!','green');
     renderJobAppStatus();
@@ -6309,7 +6322,10 @@ window.withdrawApp=async function(){
     const myApp=Object.values(apps).find(a=>a.from===currentNick&&a.status==='new');
     if(!myApp)return toast('⚠️ Нет активной заявки','gold');
     if(!confirm('Отозвать заявку на работу?')) return;
-    await remove(appRef(myApp.id));
+    const {error}=await supabase.rpc('kp_job_application',{
+        p_action:'withdraw',p_app_id:myApp.id
+    });
+    if(error){console.error('[job application withdraw]',error);return toast('❌ '+error.message,'red');}
     await pushNotification(currentNick,'📝 Заявка отозвана','system');
     toast('📝 Заявка отозвана','gold');
     renderJobAppStatus();
@@ -6331,7 +6347,9 @@ function getMunicipalJobSalaryLabel(role){
 window.renderJobAppStatus=async function(){
     const snap=await get(appsRef());
     const apps=snap.val()||{};
-    const myApp=Object.values(apps).find(a=>a.from===currentNick);
+    const myApp=Object.values(apps).filter(a=>a.from===currentNick)
+        .sort((a,b)=>(b.status==='new')-(a.status==='new')||
+            Number(b.createdAt||0)-Number(a.createdAt||0))[0];
     const statusEl=qs('myAppStatus');
     const jobsListEl=qs('myJobsList');
     const uSnap=await get(userRef(currentNick));
@@ -6846,20 +6864,20 @@ window.approveApp=async function(id,ok){
             toast(`❌ Лимит работ (${getJobLimit(u)}) для ${a.from}`,'red');
             return;
         }
-        const emps = collectEmploymentsFromData(u, a.from);
-        const newEmp = { id: `muni_${a.target}`, type: 'municipal', role: a.target };
-        const patch={job:a.target,vehicle:'',employments:[...emps.filter(e=>e.id!==newEmp.id), newEmp], displayJob: u.displayJob || a.target};
-        if(a.target===JOB_ADVERTISER){Object.assign(patch,{advertiserSalaryPaidThroughWeek:advertiserWeekKey(),advertiserStartedWeek:advertiserWeekKey()});}
-        if(a.target===JOB_JANITOR){Object.assign(patch,{janitorTaskDate:todayKey(),janitorSubmissionId:'',janitorSubmissionStatus:'ready',janitorProof:'',janitorComment:''});}
-        else{Object.assign(patch,{janitorTaskDate:'',janitorSubmissionId:'',janitorSubmissionStatus:'',janitorProof:'',janitorComment:''});}
-        await update(userRef(a.from),patch);
+        const {error}=await supabase.rpc('kp_job_application',{
+            p_action:'approve',p_app_id:id
+        });
+        if(error){console.error('[job approval]',error);toast('❌ '+error.message,'red');return;}
         await pushNotification(a.from,`✅ Должность: ${a.target}`,'system');
         toast(`✅ ${displayNick(u)||a.from} — ${a.target}`,'green');
     }else{
+        const {error}=await supabase.rpc('kp_job_application',{
+            p_action:'reject',p_app_id:id
+        });
+        if(error){console.error('[job rejection]',error);toast('❌ '+error.message,'red');return;}
         await pushNotification(a.from,`❌ Заявка на ${a.target} отклонена`,'system');
         toast('❌ Отклонено','red');
     }
-    await update(appRef(id),{status:'done'});
 };
 let _adminMoneyBusy = false;
 window.adminMoney=async function(){
@@ -13354,8 +13372,11 @@ async function renderHospital(){
         }else docCard.innerHTML='<div style="color:var(--muted);font-size:13px;">👨‍⚕️ Сейчас врач не назначен.</div>';
     }
     try{
-        const [svcSnap,apptSnap,photoSnap]=await Promise.all([get(hospitalServicesRef()),get(hospitalAppointmentsRef()),get(ref(db,'hospital/photos'))]);
-        renderHospitalServicesList(svcSnap.val()||{},doc);renderHospitalMyAppointments(apptSnap.val()||{});renderHospitalPhotosGallery(photoSnap.val()||{});
+        const {data,error}=await supabase.rpc('kp_hospital_view');
+        if(error)throw error;
+        renderHospitalServicesList(data?.services||{},doc);
+        renderHospitalMyAppointments(data?.appointments||{});
+        renderHospitalPhotosGallery(data?.photos||{});
     }catch(e){console.error('[hospital render]',e);}
 }
 function renderHospitalServicesList(services, doc){

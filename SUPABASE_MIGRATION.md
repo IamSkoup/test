@@ -5,6 +5,17 @@ public-name lookup, and `kapani-push` Edge Function **have been deployed**.
 The live `/health` endpoint returned `{"ok":true,"backend":"supabase","vapid":true}`.
 This does not mean the website is published or the migration is complete.
 
+Later repair status: live verification found that `kp_mayor_adjust_balance`,
+bank transfers, savings transfers, referral statistics and private mayor
+queues need their own server functions. The new definitions are in
+`supabase/004_verified_money_and_mayor.sql` and **were installed on 26 October 2026**.
+All 11 functions were confirmed to be SECURITY DEFINER, unavailable to `anon`
+and executable by `authenticated` with internal role/ownership validation.
+The live schema keeps RLS enabled and UPDATE privileges revoked for both
+client roles on `kp_wallets`, `kp_ledger`, and `kp_tree_roots`. The SQL left
+all balances untouched during installation. The existing site still uses its
+previous published code until the fixed archive is deployed to GitHub Pages.
+
 ## Architecture
 
 `config.js` contains only the project URL and public key. Browser database
