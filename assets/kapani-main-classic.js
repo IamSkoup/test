@@ -2013,6 +2013,13 @@ function enterService(page){
     if(service==='messages'){ 
         try{ if(!qs('chatEmojiPanel')) buildEmojiPanels(); }catch(e){}
         setGeneralChatPresence(!!document.querySelector('#msgPanel0.active'));
+        // A loading placeholder may replace the old HTML on navigation.
+        // Never let an old render signature keep that placeholder visible.
+        const chatHost=qs('chatMessages');
+        if(chatHost) chatHost.removeAttribute('data-sig');
+        if(document.querySelector('#msgPanel0.active')){
+            Promise.resolve(renderChat(lastChatMsgs||{})).catch(e=>console.warn('[Kapani cached chat]',e));
+        }
         loadAllUsersCache().then(()=>{ if(curPage==='messages') renderDmUserList(allUsersCache); }).catch(e=>console.warn('[Kapani] users cache:',e));
         attachChatService();
     }
@@ -2026,11 +2033,13 @@ function leaveService(page){
     const mapping={messages:'messages',market:'market',home:'home',tasks:'tasks',driverPage:'orders',deliveryPage:'orders',adminPage:'admin',ratings:'ratings',businesses:'business',bizDetail:'business',bizOwnerPanel:'business',dutyPage:'duty'};
     const service=mapping[page]; if(service) removeAllServiceListeners(service);
     if(page==='messages'){
+        window._dmOpenSeq=(window._dmOpenSeq||0)+1;
+        if(dmListeners.current?.timeoutId) clearTimeout(dmListeners.current.timeoutId);
         setGeneralChatPresence(false);
-        if(dmListeners.current){try{off(dmListeners.current.ref,'value',dmListeners.current.fn);}catch(e){} dmListeners.current=null;}
-        if(dmListeners.read){try{off(dmListeners.read.ref,'value',dmListeners.read.fn);}catch(e){} dmListeners.read=null;}
+        if(dmListeners.current){try{if(dmListeners.current.unsub) dmListeners.current.unsub();else off(dmListeners.current.ref,'value',dmListeners.current.fn);}catch(e){} dmListeners.current=null;}
+        if(dmListeners.read){try{if(dmListeners.read.unsub) dmListeners.read.unsub();else off(dmListeners.read.ref,'value',dmListeners.read.fn);}catch(e){} dmListeners.read=null;}
         if(dmTypingUnsub){try{dmTypingUnsub();}catch(e){} dmTypingUnsub=null;}
-        currentDmNick=null;
+        currentDmNick=null;dmLoading=false;
     }
     if(page==='tasks') stopTaskLiveListeners();
     if(page==='taxi'){ destroyClientTrackingMap(); _taxiUiKey=''; }
@@ -2928,8 +2937,8 @@ function showFirstPushPrompt(){
     if(Notification.permission==='granted') { markFirstPushPromptHandled(); void requestPushPermission().catch(e=>console.error('[push permission prompt]',e)); return; }
     const m=document.createElement('div');
     m.id='firstPushPrompt';
-    m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:10000;display:flex;align-items:flex-end;justify-content:center;padding:16px;';
-    m.innerHTML=`<div style="width:100%;max-width:490px;background:#170b10;border:1px solid var(--border);border-radius:24px;padding:22px;box-shadow:var(--shadow);">
+    m.style.cssText='position:fixed;inset:0;width:100vw;max-width:none;height:100dvh;box-sizing:border-box;background:rgba(1,17,11,.78);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(5px);';
+    m.innerHTML=`<div style="width:100%;max-width:490px;background:linear-gradient(145deg,#1d4a33 0%,#123928 48%,#0b281d 100%);border:1px solid rgba(150,217,161,.34);border-radius:24px;padding:22px;box-shadow:0 30px 88px rgba(0,0,0,.5);">
       <div style="font-size:34px;margin-bottom:8px;">🔔</div>
       <div style="font-size:20px;font-weight:900;margin-bottom:6px;">Включить уведомления?</div>
       <div style="font-size:13px;line-height:1.55;color:var(--muted);margin-bottom:16px;">Получайте сообщения, переводы, уведомления мэрии и другие важные события Капани.</div>
@@ -5220,6 +5229,7 @@ window.switchMsgTab=function(i){
     if(i===0){
         const host = qs('chatMessages');
         if(host && !host.innerHTML.trim()){ host.innerHTML = loadingHtml('Загрузка чата...'); }
+        if(host) host.removeAttribute('data-sig');
         chatLoading=false;
         Promise.resolve(renderChat(lastChatMsgs||{})).catch(err=>console.warn('[Kapani chat render]',err));
         try{set(ref(db,`readState/${currentNick}/chat`),Date.now());}catch(e){}
@@ -5242,7 +5252,7 @@ window.openDmChat=async function(nick){
     // previous chat are ignored and can no longer replace the new chat.
     const openSeq = (window._dmOpenSeq = (window._dmOpenSeq || 0) + 1);
     currentDmNick = nick;
-    try{ await set(ref(db,`presence/${currentNick}/dmOpenWith`),nick); }catch(e){}
+    Promise.resolve(set(ref(db,`presence/${currentNick}/dmOpenWith`),nick)).catch(e=>console.warn('[Kapani DM presence]',e));
     dmPeerReadTs = 0;
 
     const listView = qs('dmListView');
@@ -5252,6 +5262,7 @@ window.openDmChat=async function(nick){
     const avWrap = qs('dmChatAvWrap');
 
     // Stop previous listeners before starting a new conversation.
+    if(dmListeners.current?.timeoutId) clearTimeout(dmListeners.current.timeoutId);
     if(dmListeners.current?.unsub){ try{ dmListeners.current.unsub(); }catch(e){} }
     else if(dmListeners.current){ try{ off(dmListeners.current.ref,'value',dmListeners.current.fn); }catch(e){} }
     dmListeners.current = null;
@@ -5299,7 +5310,7 @@ window.openDmChat=async function(nick){
         }
 
         const key = dmKey(currentNick,nick);
-        try{ await update(dmIndexRef(currentNick),{[nick]:{...(dmConvoMeta[nick]||{}),unread:false,lastReadAt:Date.now()}}); }catch(e){ console.warn('[DM index read]',e); }
+        Promise.resolve(update(dmIndexRef(currentNick),{[nick]:{...(dmConvoMeta[nick]||{}),unread:false,lastReadAt:Date.now()}})).catch(e=>console.warn('[DM index read]',e));
         const dmR = query(dmRef(key),orderByChild('createdAt'),limitToLast(80));
         const dmFn = (snap2) => {
             if(openSeq !== window._dmOpenSeq || currentDmNick !== nick) return;
@@ -11984,12 +11995,12 @@ window.renderChat = async function(msgs){
     
     _chatRenderPending = true;
     
-    requestAnimationFrame(async () => {
+    requestAnimationFrame(() => {
+      try {
         const scroll = preserveScrollState(el);
         const entries = Object.entries(lastChatMsgs).sort((a,b)=>(a[1]?.createdAt||0)-(b[1]?.createdAt||0)).slice(-60);
         const sig = entries.map(([id,m])=>`${id}:${m.createdAt||0}:${m.text||''}:${m.msgType||''}:${m.mediaData?1:0}:${m.edited?1:0}:${JSON.stringify(m.attachments||[])}:${JSON.stringify(m.reactions||{})}:${JSON.stringify(m.reply||{})}`).join('|') + '|r:' + JSON.stringify(chatReadStates||{});
-        if(el.dataset.sig === sig){ _chatRenderPending = false; return; }
-        el.dataset.sig = sig;
+        if(el.dataset.sig === sig && !el.textContent.includes('Загрузка чата...')) return;
         
         // Get current user's chat bubble style
         let myBubbleStyle = '';
@@ -12052,9 +12063,16 @@ window.renderChat = async function(msgs){
                 </div>
             </div>`;
         }).join('');
-        el.innerHTML = html;
+        el.innerHTML = html || '<div class="chat-empty-state">Пока нет сообщений. Напишите первым.</div>';
+        el.dataset.sig = sig;
         restoreScrollState(el, scroll);
+      } catch(err) {
+        console.error('[Kapani general chat render]',err);
+        el.removeAttribute('data-sig');
+        if(el.textContent.includes('Загрузка чата...')) el.innerHTML='<div class="chat-empty-state">Не удалось отобразить чат. Перейдите в другой раздел и вернитесь.</div>';
+      } finally {
         _chatRenderPending = false;
+      }
     });
 };
 window.deleteChat = async function(msgId){

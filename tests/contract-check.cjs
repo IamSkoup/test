@@ -10,6 +10,7 @@ const extra = read('assets/kapani-finishes.js');
 const index = read('index.html');
 const css = read('assets/kapani-v10.css');
 const subscriptionNews = read('supabase/015_subscriptions_and_news.sql');
+const profileTiers = read('supabase/016_profile_plus_frames.sql');
 let count = 0;
 const test = (name, condition) => {
   assert.ok(condition, name);
@@ -56,10 +57,14 @@ test('message delete requires confirmation', main.includes("confirm('Удали�
 test('album attachments are sent explicitly', main.includes('async function sendDraft'));
 test('history hides but does not delete', extra.includes("sessionStorage.setItem('kp_hide_delivery_history'"));
 test('licences and rental SQL last', sql.includes('014_rentals_and_access.sql'));
-test('revision 11 css loaded with cache buster', index.includes('assets/kapani-v10.css?v=11'));
-test('revision 11 main script cache buster', index.includes('assets/kapani-main-classic.js?v=11'));
+test('revision 12 css loaded with cache buster', index.includes('assets/kapani-v10.css?v=12'));
+test('revision 12 main script cache buster', index.includes('assets/kapani-main-classic.js?v=12'));
 test('revision 10 SQL appended to full installer', sql.includes('-- ===== 015_subscriptions_and_news.sql ====='));
 test('installer and individual new migration equivalent', sql.includes(subscriptionNews.trim()));
+test('Plus profile frame fix follows subscription migration', sql.includes('-- ===== 016_profile_plus_frames.sql =====') && sql.includes(profileTiers.trim()));
+test('Plus frames validated by active server-side subscription', profileTiers.includes('subscription_tier>=1 and val=any(plus_frames)') && profileTiers.includes("array['gold','pulse','neon','ice','forest_moss','nature_meadow']"));
+test('Ultra-only frame stays locked for Plus', profileTiers.includes('subscription_tier>=2 and val=any(ultra_frames)'));
+test('Prime frame stays locked for Plus and Ultra', profileTiers.includes('subscription_tier>=3 and val=any(prime_frames)'));
 test('server subscription prices equal configuration', [299, 899, 1499].every(p => sql.includes(String(p))) &&
   ['plus', 'ultra', 'prime'].every(plan => main.includes("p_plan:type")));
 test('subscription has server-signed wallet settlement', subscriptionNews.includes("public.kp_v8_money(a,-price,p_id,'subscription_'||p_action"));
@@ -79,6 +84,12 @@ test('hospital panel loads protected view', main.includes("supabase.rpc('kp_hosp
 test('hospital service buttons are explicit', main.includes("'Включить':'Отключить'") && main.includes('>Изменить</button>'));
 test('casino wallet requires successful backend operation', main.includes("const result=await rpc('kp_casino_v8'") && main.includes('Сервер не подтвердил изменение игрового баланса'));
 test('desktop sheets center in viewport', css.includes('#kpV8Sheet.v8-overlay') && css.includes('justify-content:center!important') && css.includes('align-items:center!important'));
+test('casino overlay ignores the global 640px max-width', css.includes('width:100vw!important;max-width:none!important;') && css.includes('min-width:100vw!important;height:100dvh!important;'));
+test('push prompt has green gradient, never old red', main.includes('background:linear-gradient(145deg,#1d4a33') && !main.includes('max-width:490px;background:#170b10'));
+test('chat signatures cleared on navigation', main.includes("chatHost.removeAttribute('data-sig')") && main.includes("host.removeAttribute('data-sig')"));
+test('chat render has failure recovery', main.includes("console.error('[Kapani general chat render]',err)") && main.includes('_chatRenderPending = false;'));
+test('DM opening no longer blocks on presence update', main.includes("Promise.resolve(set(ref(db,`presence/${currentNick}/dmOpenWith`),nick))"));
+test('mobile casino disables infinite GPU animations', css.includes('.v8-game-stage.playing>img{animation:none!important'));
 test('mobile sheets no longer anchor to bottom', css.includes('#kpV8Sheet.v8-overlay{padding:12px!important;align-items:center!important;justify-content:center!important;}'));
 test('other dialogs receive centered full-screen roots', css.includes('#userProfileModal.open,#historyModal.open,#giftSubModal') && css.includes('#profileCustomizerModal > div'));
 test('inline handlers escape double and single quotes', main.includes('onclick="${html(click)}"') && main.includes('function button(label,click'));
