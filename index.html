@@ -1046,6 +1046,97 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
 <link rel="stylesheet" href="assets/kapani-forest.css?v=1">
 <link rel="stylesheet" href="assets/kapani-forest-finishes.css?v=2">
 <link rel="stylesheet" href="assets/kapani-auth.css?v=1">
+<style>
+/* Smooth auth-mode transitions; the existing authentication handlers stay intact. */
+#authSection .auth-mode-tabs {
+    position: relative;
+    isolation: isolate;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+    padding: 4px;
+    overflow: hidden;
+}
+#authSection .auth-mode-tabs::before {
+    content: '';
+    position: absolute;
+    z-index: 0;
+    top: 4px;
+    bottom: 4px;
+    left: 4px;
+    width: calc((100% - 8px) / 2);
+    border-radius: 12px;
+    background: linear-gradient(135deg, #2b6049, #326e54);
+    border: 1px solid rgba(126, 198, 158, .22);
+    box-shadow: 0 5px 18px rgba(26, 103, 69, .16);
+    pointer-events: none;
+    transform: translateX(0);
+    transition: transform .48s cubic-bezier(.22, 1, .36, 1);
+}
+#authSection .auth-card[data-auth-mode="register"] .auth-mode-tabs::before,
+#authSection .auth-mode-tabs:has(#authTabRegister.is-active)::before {
+    transform: translateX(100%);
+}
+#authSection .auth-mode-tab,
+#authSection .auth-mode-tab.is-active {
+    position: relative;
+    z-index: 1;
+    min-width: 0;
+    background: transparent !important;
+    box-shadow: none !important;
+    transition: color .35s ease, transform .25s ease, text-shadow .35s ease;
+}
+#authSection .auth-mode-tab:active { transform: scale(.97); }
+#authSection .auth-mode-tab.is-active { text-shadow: 0 0 16px rgba(116, 205, 158, .2); }
+
+/* Keep the optional field in layout so changing [hidden] can animate its height. */
+#authSection #lgInviterWrap {
+    display: block !important;
+    max-height: 100px;
+    opacity: 1;
+    overflow: hidden;
+    visibility: visible;
+    transform: translateY(0);
+    transition: max-height .48s cubic-bezier(.22, 1, .36, 1),
+                opacity .34s ease .08s,
+                transform .48s cubic-bezier(.22, 1, .36, 1),
+                visibility 0s;
+}
+#authSection #lgInviterWrap[hidden] {
+    max-height: 0;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-10px);
+    transition: max-height .42s cubic-bezier(.22, 1, .36, 1),
+                opacity .22s ease,
+                transform .42s cubic-bezier(.22, 1, .36, 1),
+                visibility 0s linear .42s;
+}
+
+#authSection .auth-card[data-auth-mode="register"] #authForm,
+#authSection .auth-card:has(#authTabRegister.is-active) #authForm {
+    animation: kapaniAuthFormToRegister .43s cubic-bezier(.22, 1, .36, 1) both;
+}
+#authSection .auth-card[data-auth-mode="login"] #authForm,
+#authSection .auth-card:has(#authTabLogin.is-active) #authForm {
+    animation: kapaniAuthFormToLogin .43s cubic-bezier(.22, 1, .36, 1) both;
+}
+@keyframes kapaniAuthFormToRegister {
+    from { opacity: .4; transform: translateX(12px) translateY(3px); }
+    to   { opacity: 1; transform: translateX(0) translateY(0); }
+}
+@keyframes kapaniAuthFormToLogin {
+    from { opacity: .4; transform: translateX(-12px) translateY(3px); }
+    to   { opacity: 1; transform: translateX(0) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    #authSection .auth-mode-tabs::before,
+    #authSection .auth-mode-tab,
+    #authSection #lgInviterWrap { transition: none !important; }
+    #authSection .auth-card #authForm { animation: none !important; }
+}
+</style>
 </head>
 <body>
 
