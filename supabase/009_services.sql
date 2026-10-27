@@ -3,8 +3,21 @@ begin;
 create or replace function public.kp_v8_distance(a numeric,b numeric,c numeric,d numeric) returns numeric language sql immutable set search_path='' as $$
  select (6371*2*asin(least(1,sqrt(power(sin(radians((c-a)::double precision)/2),2)+cos(radians(a::double precision))*cos(radians(c::double precision))*power(sin(radians((d-b)::double precision)/2),2)))))::numeric;
 $$;
+-- The displayed taxi fare is quoted by PostgreSQL before the order can be sent.
+create or replace function public.kp_service_quote_v8(p_kind text,p_from_lat numeric,p_from_lng numeric,p_to_lat numeric,p_to_lng numeric)
+returns jsonb language plpgsql stable security definer set search_path='' as $$
+declare dist numeric;tariff integer;
+begin
+ if public.kp_v8_actor() is null then raise exception 'Authentication required';end if;
+ if p_kind not in ('taxi','delivery') or not public.kp_v8_point(p_from_lat::text,p_from_lng::text)
+   or not public.kp_v8_point(p_to_lat::text,p_to_lng::text) then raise exception 'Select two map points';end if;
+ dist:=public.kp_v8_distance(p_from_lat,p_from_lng,p_to_lat,p_to_lng);
+ if dist<=0 or dist>100 then raise exception 'Route must be between 0 and 100 km';end if;
+ tariff:=case when p_kind='taxi' then 250 else 200 end;
+ return jsonb_build_object('distanceKm',dist,'price',greatest(1,round(dist*tariff)::bigint),'pricePerKm',tariff,'method','straight_line_haversine');
+end; $$;
 create or replace function public.kp_service_v8(p_kind text,p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor(); branch_name text; root jsonb; orders jsonb; o jsonb; users jsonb; u jsonb; b jsonb; item jsonb; m jsonb; doctor text; worker text; supplier text; price bigint; product_price bigint:=0; distance numeric; total bigint; at_ms bigint:=(extract(epoch from now())*1000)::bigint; expected text; entry record;
+declare a text:=public.kp_v8_actor(); branch_name text; root jsonb; orders jsonb; o jsonb; users jsonb; u jsonb; b jsonb; item jsonb; m jsonb; doctor text; worker text; supplier text; price bigint; product_price bigint:=0; distance numeric; total bigint; at_ms bigint:=(extract(epoch from now())*1000)::bigint; expected text; entry record;biz_root jsonb;biz_balance bigint;
 begin
  if a is null then raise exception 'Authentication required'; end if;
  if p_kind not in ('taxi','delivery','hospital') or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid service request'; end if;
@@ -23,7 +36,10 @@ begin
    if p_kind='hospital' then
      item:=root->'services'->(p_data->>'serviceId');
      select key into doctor from jsonb_each(users) where public.kp_v8_role(key,'Врач') order by key limit 1;
-     if item is null or item->>'active'='false' or doctor is null or doctor=a then raise exception 'Service unavailable'; end if;
+     if item is null then raise exception 'Hospital service not found';end if;
+     if item->>'active'='false' then raise exception 'Hospital service is disabled';end if;
+     if doctor is null then raise exception 'No doctor is assigned';end if;
+     if doctor=a then raise exception 'Cannot book an appointment with yourself';end if;
      if p_data->>'date' is null or (p_data->>'date')::date<(now() at time zone 'Europe/Moscow')::date or (p_data->>'date')::date>(now() at time zone 'Europe/Moscow')::date+90 or coalesce(p_data->>'time','')!~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then raise exception 'Invalid appointment time'; end if;
      if ((p_data->>'date')||' '||(p_data->>'time'))::timestamp <= now() at time zone 'Europe/Moscow' then raise exception 'Choose a future appointment'; end if;
      if exists(select 1 from jsonb_each(orders) e where e.value->>'doctorNick'=doctor and e.value->>'date'=p_data->>'date' and e.value->>'time'=p_data->>'time' and e.value->>'status' not in ('cancelled','rejected','paid')) then raise exception 'This time is already booked'; end if;
@@ -36,6 +52,7 @@ begin
        if not public.kp_v8_point(p_data->>'clientLat',p_data->>'clientLng') then raise exception 'Select pickup on map'; end if;
        if exists(select 1 from jsonb_each(orders) e where e.value->>'client'=a and e.value->>'type'='taxi' and e.value->>'status' not in ('paid','cancelled','completed')) then raise exception 'You already have an active ride'; end if;
        distance:=public.kp_v8_distance((p_data->>'clientLat')::numeric,(p_data->>'clientLng')::numeric,(p_data->>'destLat')::numeric,(p_data->>'destLng')::numeric);price:=greatest(1,round(distance*250)::bigint);
+       if p_data->>'quotedPrice' is null or (p_data->>'quotedPrice')::bigint<>price then raise exception 'Fare changed: request a new server quote';end if;
        o:=jsonb_build_object('id',p_id,'client',a,'type','taxi','status','pending','clientLat',p_data->'clientLat','clientLng',p_data->'clientLng','destLat',p_data->'destLat','destLng',p_data->'destLng','price',price,'distanceKm',distance,'info',left(coalesce(p_data->>'info','Поездка по карте'),400));
        select key into worker from jsonb_each(users) where key<>a and public.kp_v8_role(key,'Водитель') and value->'settings'->>'taxiOnline'='true' and coalesce((value->>'lastSeen')::bigint,0)>at_ms-120000 and not exists(select 1 from jsonb_each(orders) e where e.value->>'worker'=key and e.value->>'status' in ('accepted','driver_arriving','in_progress','waiting_payment')) order by key limit 1;
        if worker is not null then o:=o||jsonb_build_object('worker',worker,'status','driver_arriving','driverAvatar',users->worker->>'avatar','driverVehicle',users->worker->>'vehicle'); end if;
@@ -51,9 +68,8 @@ begin
          if m is null or not public.kp_v8_point(m->>'sellerLat',m->>'sellerLng') then raise exception 'Listing has no pickup point'; end if;
          if m->>'category' in ('service','work') then raise exception 'Only physical goods can be delivered'; end if;
          if exists(select 1 from jsonb_each(orders) e where e.value->>'listingId'=p_data->>'listingId' and e.value->>'status'<>'cancelled') then raise exception 'Delivery already exists for this purchase'; end if;
-         if m->>'status'='meeting_confirmed' and m->>'buyer'=a then
-           perform public.kp_market_action('purchase',p_data->>'listingId',coalesce(p_data->'purchase','{}'));
-         elsif m->>'status'<>'sold' or m->>'buyer' is distinct from a then raise exception 'Seller must confirm the purchase first'; end if;
+         -- The market purchase is confirmed and paid separately.
+         if m->>'status'<>'sold' or m->>'buyer' is distinct from a then raise exception 'Purchase and pay for the listing before delivery'; end if;
          o:=jsonb_build_object('source','marketplace','listingId',p_data->>'listingId','from',m->>'seller','items',m->>'title','listingTitle',m->>'title','pickupLat',m->'sellerLat','pickupLng',m->'sellerLng');
        else raise exception 'Select delivery source'; end if;
        if supplier=a then raise exception 'Cannot purchase your own product'; end if;
@@ -74,6 +90,9 @@ begin
      if o->>'status' not in ('pending','waiting') or worker is not null then raise exception 'Order already assigned'; end if;
      if exists(select 1 from jsonb_each(orders) e where e.value->>'worker'=a and e.value->>'status' in ('driver_arriving','accepted','client_confirmed','in_progress','waiting_payment','delivered')) then raise exception 'Finish your active order first'; end if;
      o:=o||jsonb_build_object('worker',a,'status',case when p_kind='taxi' then 'driver_arriving' else 'client_confirmed' end,'driverAvatar',u->>'avatar','driverVehicle',u->>'vehicle','acceptedAt',at_ms);
+   elsif p_action='release' then
+     if p_kind='hospital' or a is distinct from worker or o->>'status' not in ('accepted','driver_arriving','client_confirmed') then raise exception 'Cannot release active service';end if;
+     o:=o||jsonb_build_object('worker',null,'status',case when p_kind='taxi' then 'pending' else 'waiting' end,'driverLat',null,'driverLng',null,'driverAvatar',null,'driverVehicle',null,'releasedAt',at_ms);
    elsif p_action='cancel' then
      if a is distinct from o->>'client' and a is distinct from worker and a<>'Кайон' and not(p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Not an order participant'; end if;
      if o->>'status' in ('cancelled','rejected') then return o; end if;
@@ -88,7 +107,7 @@ begin
      if a is distinct from worker and not (p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Assigned worker required'; end if;
      expected:=case when p_kind='hospital' then 'accepted' else 'in_progress' end;
      if o->>'status'=expected then return o; end if;
-     if o->>'status' not in ('pending','accepted','driver_arriving','client_confirmed') then raise exception 'Invalid order transition'; end if;
+     if not((o->>'status') = any(case when p_kind='hospital' then array['pending'] when p_kind='taxi' then array['pending','driver_arriving','accepted'] else array['waiting','client_confirmed'] end)) then raise exception 'Invalid order transition'; end if;
      o:=o||jsonb_build_object('status',expected);
    elsif p_action='finish' then
      if a is distinct from worker and not (p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Assigned worker required'; end if;
@@ -103,7 +122,19 @@ begin
      total:=coalesce((o->>'escrowAmount')::bigint,0);product_price:=coalesce((o->>'productPrice')::bigint,0);
      if total<>price+product_price then raise exception 'Escrow mismatch'; end if;
      if price>0 then perform public.kp_v8_money(worker,price,(md5(p_kind||p_id||':worker'))::uuid,'service_payout',jsonb_build_object('order',p_id));end if;
-     if product_price>0 then perform public.kp_v8_money(o->>'supplier',product_price,(md5(p_kind||p_id||':product'))::uuid,'business_sale',jsonb_build_object('order',p_id));end if;
+     if product_price>0 and p_kind='delivery' and o->>'source'='business' then
+       select document into biz_root from public.kp_tree_roots where branch='businesses' for update;
+       b:=biz_root->(o->>'bizId');
+       if b is null then raise exception 'Business account missing';end if;
+       biz_balance:=coalesce((b->>'balance')::bigint,0)+product_price;
+       if biz_balance>1000000000 then raise exception 'Business account limit';end if;
+       b:=b||jsonb_build_object('balance',biz_balance);
+       perform public.kp_v8_put('businesses',jsonb_set(biz_root,array[o->>'bizId'],b));
+       insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+         values('delivery:'||p_id,o->>'bizId',a,product_price,biz_balance,'sale',jsonb_build_object('orderId',p_id,'client',o->>'client'));
+     elsif product_price>0 then
+       perform public.kp_v8_money(o->>'supplier',product_price,(md5(p_kind||p_id||':product'))::uuid,'business_sale',jsonb_build_object('order',p_id));
+     end if;
      o:=o||jsonb_build_object('status',case when p_kind='delivery' then 'done' else 'paid' end,'clientConfirmed',true,'clientReceived',true,'paymentStatus','paid','payoutDone',true,'escrowAmount',0,'paidAt',at_ms);
    else raise exception 'Unknown service action'; end if;
    o:=o||jsonb_build_object('updatedAt',at_ms);
@@ -112,12 +143,14 @@ begin
  if p_kind='hospital' then root:=jsonb_set(root,'{appointments}',orders,true);else root:=orders;end if;
  perform public.kp_v8_put(branch_name,root);
  if p_action<>'location' then
-   perform public.kp_v8_notify(o->>'client',case p_kind when 'taxi' then 'Такси' when 'delivery' then 'Доставка' else 'Больница' end||': '||case p_action when 'create' then 'заказ создан, оплата зарезервирована' when 'cancel' then 'заказ отменён, оплата возвращена' when 'take' then 'исполнитель назначен' when 'start' then 'выполнение началось' when 'finish' then 'подтвердите получение услуги' else 'оплата завершена' end,'system',p_kind||'_'||p_id||'_'||p_action);
+   perform public.kp_v8_notify(o->>'client',case p_kind when 'taxi' then 'Такси' when 'delivery' then 'Доставка' else 'Больница' end||': '||case p_action when 'create' then 'заказ создан, оплата зарезервирована' when 'cancel' then 'заказ отменён, оплата возвращена' when 'take' then 'исполнитель назначен' when 'start' then 'выполнение началось' when 'finish' then 'подтвердите получение услуги' when 'release' then 'водитель отказался, ищем следующего' else 'оплата завершена' end,'system',p_kind||'_'||p_id||'_'||p_action);
    if p_action in ('create','take') and o->>'worker' is not null then perform public.kp_v8_notify(o->>'worker','Новый заказ: '||case p_kind when 'taxi' then 'такси' when 'delivery' then 'доставка' else 'приём в больнице' end,'system',p_kind||'_'||p_id||'assigned');end if;
  end if;
  return o;
 end; $$;
 revoke all on function public.kp_v8_distance(numeric,numeric,numeric,numeric) from public,anon,authenticated;
+revoke all on function public.kp_service_quote_v8(text,numeric,numeric,numeric,numeric) from public,anon;
+grant execute on function public.kp_service_quote_v8(text,numeric,numeric,numeric,numeric) to authenticated;
 revoke all on function public.kp_service_v8(text,text,text,jsonb) from public,anon;
 grant execute on function public.kp_service_v8(text,text,text,jsonb) to authenticated;
 commit;

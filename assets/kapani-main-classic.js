@@ -238,10 +238,10 @@ const ECONOMY_SAVINGS_RATE_TIERS = [
     { max: Infinity, rate: 0.25, label: '25%' }
 ];
 function getSavingsDailyRate(balance){
-    return 0.005; // 0.5% в день
+    return 0; // Серверное начисление процентов отсутствует.
 }
 function getSavingsRateLabel(balance){
-    return '0.5%';
+    return 'Без процентов — автоматическое начисление не предусмотрено';
 }
 function getWealthTaxRate(taxBase){
     const amount = Math.max(0, Number(taxBase) || 0);
@@ -1221,47 +1221,13 @@ function renderDebtNotice(targetId, u){
 }
 let economyMaintenanceBusy = false;
 async function processBusinessWeeklyFees(nick, u, opts = {}){
-    const owned = getOwnedActiveBusinesses(u, nick);
-    if(!owned.length) return;
-    const now = Date.now();
-    let balance = Number(u.balance || 0);
-    let charged = 0;
-    for(const b of owned){
-        const last = Number(b.bizWeeklyFeeAt || b.createdAt || now);
-        const weeks = Math.floor((now - last) / ECONOMY_WEEK_MS);
-        if(weeks <= 0) continue;
-        const fee = ECONOMY_BUSINESS_WEEKLY_FEE * weeks;
-        balance -= fee;
-        charged += fee;
-        await update(bizItemRef(b.id), { bizWeeklyFeeAt: last + weeks * ECONOMY_WEEK_MS });
-        await logTx(nick, { type: 'out', who: b.name || 'Бизнес', amt: fee, desc: `Абонентская плата бизнеса «${b.name}» (${weeks} нед.)` });
-        if(opts.notify !== false) await pushNotification(nick, `🏪 Списано ${fee}₽ за ${weeks} нед. наличия бизнеса «${b.name}»`, 'money');
-    }
-    if(charged > 0){
-        await update(userRef(nick), { balance });
-        await window.addMunicipalTreasury?.(charged, `Абонентская плата бизнеса от ${nick}`, {sourceNick:nick,sourceType:'business_weekly_fee'});
-    }
+    // В защищённой экономике нет RPC для этого взноса.
+    // Клиент не имеет права списывать деньги и изображать налоговый журнал.
+    return false;
 }
 async function processSavingsInterest(nick, u, opts = {}){
-    const savings = Number(u.savingsBalance || 0);
-    if(savings <= 0) return u;
-    const now = Date.now();
-    const last = Number(u.savingsLastInterestAt || u.createdAt || now);
-    const days = Math.floor((now - last) / ECONOMY_DAY_MS);
-    if(days <= 0) return u;
-    let total = savings;
-    for(let i = 0; i < days; i++){
-        const dailyRate = getSavingsDailyRate(total);
-        total = Math.round(total * (1 + dailyRate));
-    }
-    const interest = total - savings;
-    const patch = { savingsBalance: total, savingsLastInterestAt: last + days * ECONOMY_DAY_MS };
-    await update(userRef(nick), patch);
-    if(interest > 0 && opts.notify !== false){
-        await logTx(nick, { type: 'in', who: 'Накопительный счёт', amt: interest, desc: `Начисление ${days} дн. по действующей ставке` });
-        await pushNotification(nick, `📈 Накопительный счёт: +${interest}₽ за ${days} дн.`, 'money');
-    }
-    return { ...u, ...patch };
+    // Обновлять этот счёт в браузере запрещено. Сервер не платит проценты.
+    return u;
 }
 
 async function processEconomyChargesForUser(nick, opts = {}) {
@@ -1418,6 +1384,9 @@ window.getAdvertiserReferralCount=getAdvertiserReferralCount;
 window.clearAdvertiserReferralStats=clearAdvertiserReferralStats;
 
 async function processAdvertiserWeeklySalary(nick, uSnapshot){
+    // В текущих RPC нет защищённой выплаты рекламщику.
+    // Считать приглашения можно, но выдавать деньги браузером нельзя.
+    return uSnapshot || null;
     if(!nick) return null;
     const userSnap = uSnapshot ? { val:()=>uSnapshot, exists:()=>true } : await get(userRef(nick));
     if(!userSnap.exists()) return null;
@@ -3423,7 +3392,7 @@ function renderActiveOrders(orders) {
             }
             const tracking=(tOrder.worker&&['driver_arriving','in_progress'].includes(tOrder.status))?`<div class="tracking-card"><div class="tracking-live"><span class="pulse"></span>Live — водитель на карте</div><div id="trackingMap"></div><div id="taxiTrackingEta" style="margin-top:10px;font-size:13px;color:var(--muted);font-weight:800;"></div></div>`:'';
             const payment=tOrder.status==='waiting_payment'?`<button class="btn btn-gold" style="margin-bottom:8px" onclick="payOrder('${tOrder.id}')">💳 Оплатить ${tOrder.price}₽</button>`:'';
-            const cancel=`<button class="btn btn-ghost" style="color:var(--red);border-color:var(--red-dim);font-size:12px;" onclick="cancelOrder('${tOrder.id}')">Отменить (-35₽)</button>`;
+            const cancel=['pending','accepted','driver_arriving'].includes(tOrder.status)?`<button class="btn btn-ghost" style="color:var(--red);border-color:var(--red-dim);font-size:12px;" onclick="cancelOrder('${tOrder.id}')">Отменить · полный возврат</button>`:'';
             ts.innerHTML=`<div class="status-card gold"><div class="status-badge ${tOrder.status==='waiting_payment'?'badge-active':(tOrder.status==='pending'?'badge-wait':'badge-active')}"><span class="pulse"></span>${lbl2}</div><div style="font-weight:700;margin-bottom:8px;">🗺 ${escHtml(tOrder.info)}</div>${driverBlock}${tracking}${payment}${cancel}</div>`;
             if(tOrder.worker&&['driver_arriving','in_progress'].includes(tOrder.status)) setTimeout(()=>initClientTrackingMap(tOrder.id),50);
         }
@@ -6147,7 +6116,9 @@ function renderMarket(listings){
     const allEl=qs('marketListings');
     get(userRef(currentNick)).then(s=>{ const u=s.val()||{}; renderDebtNotice('marketDebtNotice', u); }).catch(()=>{});
     if(allEl){
-        let active=all.filter(l=>(l.status!=='sold' || l.category==='service') && !l.archived);
+        // A sold listing disappears for everybody except its buyer; otherwise
+        // the buyer cannot reopen the purchase to arrange its first delivery.
+        let active=all.filter(l=>(l.status!=='sold' || l.category==='service' || l.buyer===currentNick) && !l.archived);
         if(cat&&cat!=='all') active=active.filter(l=>(l.category||'other')===cat);
         active.sort((a,b)=>Number(isListingPinned(b)) - Number(isListingPinned(a)) || (b.createdAt||0) - (a.createdAt||0));
         allEl.innerHTML=active.length===0?'<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px 0;">Нет объявлений</div>':active.map(l=>marketCard(l,false)).join('');
@@ -6187,7 +6158,7 @@ function priceLine(l){
 function marketCard(l,isMine, isArchived=false){
     const isWork=l.category==='work';
     const isService=l.category==='service';
-    const isBuyer=l.buyer===currentNick;const canBuy=!isMine&&l.seller!==currentNick&&!isArchived;
+    const isBuyer=l.buyer===currentNick;const canBuy=!isMine&&l.seller!==currentNick&&!isArchived&&(!l.status||l.status==='active');
     const pendingSellerConfirm=isMine&&l.status==='meeting_requested';const pendingBuyerConfirm=isBuyer&&l.status==='meeting_confirmed';
     const pendingBuyerReq=isBuyer&&l.status==='meeting_requested';const chatPartner=isMine?l.buyer:(isBuyer?l.seller:null);
     const showChat=chatPartner&&(l.status==='meeting_requested'||l.status==='meeting_confirmed')&&!isArchived;
@@ -7535,8 +7506,8 @@ function attachNewsDiscussion(){
     const readFn = async snap => {
         const val = snap.val() || 0;
         if(curPage === 'newsDiscussion') renderNewsDiscussionMessages(currentNewsMsgs);
-        if(val < Date.now()) {
-            try { await set(readRef, Date.now()); } catch(e){}
+        if(val < Date.now()-30000) {
+            try { await supabase.rpc('kp_news_v10',{p_action:'read',p_news_id:currentNewsId,p_message_id:null,p_data:{}}); } catch(e){}
         }
     };
     onValue(readRef, readFn);
@@ -10513,7 +10484,7 @@ function renderBizLimitsPanel(b){
     const empCount = Object.keys(b.employees||{}).length;
     const prodCount = Object.keys(b.products||{}).length;
     const info = qs('bizLimitsInfo');
-    if(info) info.innerHTML = `Сотрудники: <b>${empCount}/${limits.employees}</b> · Товары: <b>${prodCount}/${limits.products}</b> · Макс. цена товара: <b>${limits.maxProductPrice.toLocaleString()} ₽</b><br><span style="font-size:11px;">Абонентская плата: ${ECONOMY_BUSINESS_WEEKLY_FEE} ₽/неделю</span>`;
+    if(info) info.innerHTML = `Сотрудники: <b>${empCount}/${limits.employees}</b> · Товары: <b>${prodCount}/${limits.products}</b> · Макс. цена товара: <b>${limits.maxProductPrice.toLocaleString()} ₽</b><br><span style="font-size:11px;">Отдельная абонентская плата бизнеса сервером пока не начисляется.</span>`;
     const upEl = qs('bizLimitsUpgrades');
     if(!upEl) return;
     upEl.innerHTML = `
@@ -10697,7 +10668,9 @@ function renderOwnerRoles(b){
                 <div class="biz-role-name">${escHtml(r.name)}</div>
                 ${r.desc ? `<div class="biz-role-desc">${escHtml(r.desc)}</div>` : ''}
                 <div class="biz-role-salary">${formatRoleSalary(r)}</div>
+                <div class="v8-muted" style="font-size:11px;">${normalizeRoleMode(r)==='auto'?'Автовыплата при посещении панели':'Выплата вручную'}</div>
             </div>
+            <button class="btn btn-ghost btn-sm" onclick="kpToggleBizRoleSalary('${jsEsc(rid)}')">${normalizeRoleMode(r)==='auto'?'Сделать ручной':'Включить авто'}</button>
             <button class="btn btn-red btn-sm" onclick="deleteRole('${jsEsc(rid)}')">✕</button>
         </div>`).join('') : '<div style="color:var(--muted);font-size:13px;">Ролей нет</div>';
 }
@@ -12675,7 +12648,8 @@ window.renderSubscription = async function(){
         const wealthTax = taxBase > 0 ? Math.round(taxBase * getWealthTaxRate(taxBase)) : 0;
         const taxPct = Math.round(getWealthTaxRate(taxBase) * 100);
         const totalNext = ECONOMY_ACCOUNT_WEEKLY_FEE + wealthTax;
-        taxEl.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span style="font-weight:800;">📅 Следующее списание</span><b style="color:var(--red);">−${totalNext} ₽</b></div><div style="font-size:11px;color:var(--muted);">Через <b style="color:var(--text);">${daysLeft} ${daysLeft===1?'день':(daysLeft>=2&&daysLeft<=4?'дня':'дней')}</b> · ${nextCharge.toLocaleDateString('ru',{day:'numeric',month:'long'})}<br>Налоговая база: <b>${taxBase.toLocaleString('ru-RU')} ₽</b> (основной ${Math.max(0,balance).toLocaleString('ru-RU')} ₽ + накопительный ${Math.max(0,savings).toLocaleString('ru-RU')} ₽)<br>Ставка: <b>${taxPct}%</b> · налог: <b>${wealthTax.toLocaleString('ru-RU')} ₽</b><br>Абонентская плата: <b>${ECONOMY_ACCOUNT_WEEKLY_FEE} ₽</b><br><span style="color:var(--primary);">Списание налога — только с основного баланса. Накопительный счёт не уменьшается.</span></div>`;
+        const limitedNext = Math.min(Math.max(0,Math.floor(balance)),totalNext);
+        taxEl.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span style="font-weight:800;">📅 Следующее списание (оценка)</span><b style="color:var(--red);">−${limitedNext} ₽</b></div><div style="font-size:11px;color:var(--muted);">Через <b style="color:var(--text);">${daysLeft} ${daysLeft===1?'день':(daysLeft>=2&&daysLeft<=4?'дня':'дней')}</b> · ${nextCharge.toLocaleDateString('ru',{day:'numeric',month:'long'})}<br>Налоговая база: <b>${taxBase.toLocaleString('ru-RU')} ₽</b> (основной ${Math.max(0,balance).toLocaleString('ru-RU')} ₽ + накопительный ${Math.max(0,savings).toLocaleString('ru-RU')} ₽)<br>Ставка: <b>${taxPct}%</b> · налог: <b>${wealthTax.toLocaleString('ru-RU')} ₽</b><br>Абонентская плата: <b>${ECONOMY_ACCOUNT_WEEKLY_FEE} ₽</b><br><span style="color:var(--primary);">Сервер ограничит списание доступным основным балансом и запишет итог в журнал. Накопительный счёт не уменьшается. При задолженности за несколько недель итог пересчитывается на сервере отдельно.</span></div>`;
     }
 };
 
@@ -13563,18 +13537,25 @@ function renderHospitalMyAppointments(appts){
 
 // ── Booking (record creation) ──────────────────────────────────────
 let _hospBookingServiceId = null;
-window.openHospitalBooking = function(serviceId){
+window.openHospitalBooking = async function(serviceId){
     _hospBookingServiceId = serviceId;
     const card = qs('hospitalBookingCard'); if(!card) return;
-    get(hospitalServiceRef(serviceId)).then(snap=>{
-        const s = snap.val();
-        if(!s) return toast('❌ Услуга не найдена','red');
+    try {
+        const {data,error}=await supabase.rpc('kp_hospital_view');
+        if(error)throw error;
+        const s=data?.services?.[serviceId];
+        if(!s || s.active===false) return toast('Услуга недоступна или отключена','red');
         const infoEl = qs('hospitalBookingServiceInfo');
         if(infoEl) infoEl.innerHTML = `<b>${escHtml(s.name)}</b> — ${(s.price||0).toLocaleString()} ₽<br>${escHtml(s.desc||'')}`;
-        const dateInp = qs('hospitalBookDate'); if(dateInp){ dateInp.min = todayKey(); dateInp.value = todayKey(); }
+        const dateInp = qs('hospitalBookDate');
+        if(dateInp){
+            const future=new Date(Date.now()+86400000);
+            const tomorrow=[future.getFullYear(),String(future.getMonth()+1).padStart(2,'0'),String(future.getDate()).padStart(2,'0')].join('-');
+            dateInp.min=todayKey();dateInp.value=tomorrow;
+        }
         card.style.display = 'block';
         card.scrollIntoView({behavior:'smooth', block:'center'});
-    });
+    } catch(e) {console.error('[hospital booking]',e);toast('Не удалось загрузить услугу: '+(e.message||e),'red');}
 };
 window.cancelHospitalBookingForm = function(){
     _hospBookingServiceId = null;
@@ -13707,12 +13688,13 @@ async function renderHospitalPanel(){
     if(!canAccess)return;
     const doc=getHospitalDoctor();
     try{
-        const [apptSnap,svcSnap,appsSnap,salarySnap,photoSnap]=await Promise.all([get(hospitalAppointmentsRef()),get(hospitalServicesRef()),get(hospitalAssistantAppsRef()),get(hospitalAssistantSalaryRef()),get(ref(db,'hospital/photos'))]);
-        renderHospitalPanelAppointments(apptSnap.val()||{},doc?.nick||null);
-        renderHospitalPanelServices(svcSnap.val()||{},isDoc);
-        renderHospitalPanelAssistant(appsSnap.val()||{},salarySnap.val()||0,isDoc);
-        renderHospitalPanelPhotos(photoSnap.val()||{},isDoc);
-        renderHospitalPanelFinance(Object.values(apptSnap.val()||{}),doc?.nick||null);
+        const {data,error}=await supabase.rpc('kp_hospital_view');
+        if(error)throw error;
+        renderHospitalPanelAppointments(data?.appointments||{},doc?.nick||null);
+        renderHospitalPanelServices(data?.services||{},isDoc);
+        renderHospitalPanelAssistant(data?.assistantApplications||{},data?.assistantSalary||0,isDoc);
+        renderHospitalPanelPhotos(data?.photos||{},isDoc);
+        renderHospitalPanelFinance(Object.values(data?.appointments||{}),doc?.nick||null);
         const se=qs('hospitalDoctorServiceEditor');if(se)se.style.display=isDoc?'':'none';
         const pe=qs('hospitalDoctorPhotoEditor');if(pe)pe.style.display=isDoc?'':'none';
     }catch(e){console.error('[hospital panel render]',e);}
@@ -13792,7 +13774,7 @@ window.doctorCompleteAppointment = function(id){
 function renderHospitalPanelServices(services,canManage=true){
     const el=qs('hospitalPanelServices');if(!el)return;const list=Object.values(services);
     if(!list.length){el.innerHTML='<div style="color:var(--muted);font-size:13px;">Пока нет услуг</div>';return;}
-    el.innerHTML=list.map(s=>`<div class="item-row"><div><div style="font-weight:800;">${escHtml(s.name)} ${s.active===false?'<span style="color:var(--muted);font-size:11px;">(отключена)</span>':''}</div><div style="font-size:12px;color:var(--muted);">${escHtml(s.desc||'')} · ${(s.price||0).toLocaleString()} ₽</div></div>${canManage?`<div style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm" onclick="editHospitalService('${s.id}')">✏️</button><button class="btn btn-ghost btn-sm" onclick="toggleHospitalService('${s.id}')">${s.active===false?'▶️':'⏸'}</button><button class="btn btn-ghost btn-sm" style="color:var(--red);" onclick="deleteHospitalService('${s.id}')">🗑</button></div>`:''}</div>`).join('');
+    el.innerHTML=list.map(s=>`<div class="item-row"><div><div style="font-weight:800;">${escHtml(s.name)} ${s.active===false?'<span style="color:var(--muted);font-size:11px;">(отключена)</span>':''}</div><div style="font-size:12px;color:var(--muted);">${escHtml(s.desc||'')} · ${(s.price||0).toLocaleString()} ₽</div></div>${canManage?`<div style="display:flex;gap:6px;flex-wrap:wrap;"><button class="btn btn-ghost btn-sm" onclick="editHospitalService('${s.id}')">Изменить</button><button class="btn btn-ghost btn-sm" onclick="toggleHospitalService('${s.id}')">${s.active===false?'Включить':'Отключить'}</button><button class="btn btn-ghost btn-sm" style="color:var(--red);" onclick="deleteHospitalService('${s.id}')">Удалить</button></div>`:''}</div>`).join('');
 }
 window.addHospitalService = async function(){
     if(!isHospitalDoctor(currentNick)) { toast('❌ Только для врача','red'); return; }
@@ -13811,8 +13793,9 @@ window.addHospitalService = async function(){
 };
 window.editHospitalService = async function(id){
     if(!isHospitalDoctor(currentNick)) return;
-    const snap = await get(hospitalServiceRef(id));
-    const s = snap.val(); if(!s) return;
+    const {data,error}=await supabase.rpc('kp_hospital_view');
+    if(error)throw error;
+    const s=data?.services?.[id]; if(!s) return;
     const name = prompt('Название услуги:', s.name); if(name===null) return;
     const desc = prompt('Описание:', s.desc||''); if(desc===null) return;
     const priceStr = prompt('Цена ₽:', s.price); if(priceStr===null) return;
@@ -13824,8 +13807,9 @@ window.editHospitalService = async function(id){
 };
 window.toggleHospitalService = async function(id){
     if(!isHospitalDoctor(currentNick)) return;
-    const snap = await get(hospitalServiceRef(id));
-    const s = snap.val(); if(!s) return;
+    const {data,error}=await supabase.rpc('kp_hospital_view');
+    if(error)throw error;
+    const s=data?.services?.[id]; if(!s) return;
     await update(hospitalServiceRef(id), { active: !(s.active!==false) });
     renderHospitalPanel();
 };
@@ -14045,6 +14029,7 @@ const safeURL=u=>/^(https:\/\/|data:image\/(jpeg|png|webp|gif);base64,|blob:)/i.
 const html=escHtml;
 const point=(lat,lng)=>lat!==''&&lng!==''&&lat!=null&&lng!=null&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180;
 window.kpV8Point=point;
+window.kpCurrentBizId=()=>currentBizId;
 async function rpc(name,args={}){const {data,error}=await supabase.rpc(name,args);if(error)throw new Error(error.message||'Операция не выполнена');return data;}
 async function action(key,fn){if(v8.busy.has(key))return;v8.busy.add(key);try{return await fn();}catch(e){console.error('[Kapani v8]',e);toast(errorText(e.message),'red');}finally{v8.busy.delete(key);}}
 function errorText(t){const errors={'Insufficient funds':'Недостаточно средств','Insufficient casino balance':'Недостаточно средств на игровом счёте','Wait for the current round':'Подождите завершения текущего раунда','Daily deposit limit: 10000':'Дневной лимит пополнения — 10 000 ₽','Verified active account required':'Нужен подтверждённый мэрией активный аккаунт','This time is already booked':'Это время уже занято. Выберите другое','Event payout reserve exhausted':'Лимит ставок этого события исчерпан','Seller must confirm the purchase first':'Сначала продавец должен подтвердить покупку','Cannot cancel after service has started':'После начала выполнения отмена недоступна'};if(/function.*does not exist|Could not find the function|schema cache/i.test(t))return 'База ещё не обновлена. Примените INSTALL.sql из новой версии сайта.';return errors[t]||t;}
@@ -14053,7 +14038,12 @@ const requestDelete=v8.requests.delete.bind(v8.requests);v8.requests.delete=key=
 function modal(title,content){window.kpCloseSheet();const el=document.createElement('div');el.id='kpV8Sheet';el.className='v8-overlay';el.setAttribute('role','dialog');el.setAttribute('aria-modal','true');el.innerHTML=`<section class="v8-sheet"><header><h2>${html(title)}</h2><button class="v8-icon" aria-label="Закрыть" onclick="kpCloseSheet()">×</button></header><div class="v8-sheet-body">${content}</div></section>`;el.addEventListener('click',e=>{if(e.target===el)window.kpCloseSheet();});document.body.appendChild(el);el._previous=document.activeElement;el.querySelector('button')?.focus();document.body.classList.add('v8-sheet-open');return el;}
 window.kpCloseSheet=()=>{const el=qs('kpV8Sheet');if(el){el._onClose?.();el._previous?.focus?.();el.remove();}document.body.classList.remove('v8-sheet-open');};
 document.addEventListener('keydown',e=>{const el=qs('kpV8Sheet');if(!el)return;if(e.key==='Escape')window.kpCloseSheet();if(e.key==='Tab'){const nodes=[...el.querySelectorAll('button,input,textarea,select,a[href]')].filter(n=>!n.disabled&&n.getClientRects().length);const first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}});
-function button(label,click,cls='btn btn-primary'){return `<button class="${cls}" onclick="${click}">${label}</button>`;}
+// Dynamic handlers can contain quotes (e.g. kpCasinoMove("deposit")). Escape
+// them as HTML attributes, otherwise the browser truncates the onclick and
+// throws a SyntaxError only when the resident presses the button.
+function button(label,click,cls='btn btn-primary'){
+  return `<button type="button" class="${html(cls)}" onclick="${html(click)}">${html(label)}</button>`;
+}
 async function refreshBalance(){const u=(await get(userRef(currentNick))).val();if(u){allUsersCache[currentNick]=u;updateHeader(u);}return u;}
 window.kpContactMayor=async(text='')=>{window.kpCloseSheet();closeUserProfile?.();navTo('messages');switchMsgTab(1);await openDmChat('Кайон');if(qs('dmInput')){qs('dmInput').value=text;qs('dmInput').focus();}};
 document.querySelectorAll('a,button').forEach(el=>{if(el.textContent.trim().includes('Пройти экзамен')){el.removeAttribute('href');el.removeAttribute('target');el.onclick=e=>{e.preventDefault();window.kpContactMayor('Здравствуйте! Хочу пройти экзамен КВЭ');};}});
@@ -14061,6 +14051,11 @@ document.querySelectorAll('a,button').forEach(el=>{if(el.textContent.trim().incl
 // Jobs retain their original application flow, with readable vacancy cards.
 const jobs=[['Водитель','Поездки по Капани','Забирайте пассажира в отмеченной точке, делитесь местоположением и завершайте поездку.','250 ₽ / км',60],['Доставщик','Доставка покупок','Забирайте товары бизнеса и покупки с маркетплейса. Получайте оплату после подтверждения получения.','200 ₽ / км',53],['Уборщик','Чистота посёлка','Убирайте площадку и отправляйте фотоотчёт на проверку мэрии.','1 700 ₽ / неделю',40],['Журналист','Новости Капани','Публикуйте проверенные новости и рассказывайте о жизни посёлка.','2 800 ₽ / неделю',71],['Полицейский','Порядок и помощь','Принимайте вызовы, проверяйте документы в рамках полномочий.','3 400 ₽ / неделю',80],['КСБ','Служба безопасности','Работайте с обращениями, документами и обоснованными штрафами.','4 000 ₽ / неделю',90],['Депутат','Развитие посёлка','Готовьте предложения и передавайте их на рассмотрение мэрии.','5 000 ₽ / неделю',95],['Врач','Больница Капани','Настраивайте услуги и расписание, принимайте пациентов.','Оплата приёмов',90],['Рекламщик','Сообщество Капани','Привлекайте новых жителей. Засчитываются подтверждённые приглашения.','3 900 ₽ / неделю + премия',50]];
 const jobsPage=qs('jobs');if(jobsPage){const old=[...jobsPage.querySelectorAll('.card')].find(c=>c.textContent.includes('О профессиях'));const host=old||document.createElement('section');host.className='card v8-job-descriptions';host.innerHTML='<h3>О профессиях</h3><p class="v8-muted">Выберите профессию, чтобы узнать об обязанностях, оплате и балле КВЭ.</p><div class="v8-profession-picker">'+jobs.map(([name],i)=>`<button type="button" class="btn btn-ghost" aria-expanded="false" aria-controls="v8ProfessionInfo" onclick="kpDescribeJob(${i})">${name}</button>`).join('')+'</div><div id="v8ProfessionInfo" class="v8-job-info" aria-live="polite"><div><article id="v8ProfessionBody"></article></div></div>';if(!old)qs('jSel').closest('.card').after(host);}
+jobs[8][3]='Начисление пока не подключено к защищённому серверу';
+const jobDisclaimer=document.createElement('p');
+jobDisclaimer.className='v8-muted';
+jobDisclaimer.textContent='Указанные ставки профессий не равны начислению. Деньги поступают только после подтверждённой сервером операции. Автовыплата рекламщику пока отключена.';
+jobsPage?.querySelector('.v8-job-descriptions')?.append(jobDisclaimer);
 let describedJob=-1;
 window.kpDescribeJob=i=>{const panel=qs('v8ProfessionInfo'),close=describedJob===i;describedJob=close?-1:i;document.querySelectorAll('.v8-profession-picker button').forEach((b,n)=>{b.classList.toggle('selected',!close&&n===i);b.setAttribute('aria-expanded',String(!close&&n===i));});if(!close){const [name,tag,desc,salary,kve]=jobs[i];qs('v8ProfessionBody').innerHTML=`<div class="v8-eyebrow">${tag}</div><h3>${name}</h3><p>${desc}</p><div class="v8-profession-facts"><div><small>Оплата</small><strong>${salary}</strong></div><div><small>Требуемый балл КВЭ</small><strong>${kve} и выше</strong></div></div>`;}panel.classList.toggle('open',!close);};
 
@@ -14080,7 +14075,7 @@ const marketHost=qs('marketListings');if(marketHost){const search=document.creat
 const oldMarketCard=marketCard;
 marketCard=function(l,isMine,archived){if(isMine)return oldMarketCard(l,isMine,archived);const photo=l.photos?.[0]||l.photo;return `<article class="v8-listing"><button class="v8-listing-open" onclick="kpOpenListing('${jsEsc(l.id)}')"><div class="v8-listing-photo">${photo?`<img src="${html(safeURL(photo))}" alt="${html(l.title)}" loading="lazy">`:'<span>Капани<br>Маркет</span>'}<span class="v8-category">${html(l.category||'other')}</span></div><div class="v8-listing-info"><h3>${html(l.title)}</h3><strong>${l.priceNegotiable?'Договорная':money(l.price)}</strong><small>${html(l.address||'Точка продажи не указана')}</small></div></button></article>`;};
 const oldRenderMarket=renderMarket;renderMarket=function(list){oldRenderMarket(list);const q=(qs('v8MarketSearch')?.value||'').toLowerCase().trim();if(q){const filtered=Object.fromEntries(Object.entries(list||{}).filter(([,l])=>`${l.title} ${l.desc} ${l.address||''}`.toLowerCase().includes(q)));const saved=lastMarketListings;oldRenderMarket(filtered);lastMarketListings=saved;}};
-window.kpOpenListing=id=>action('listing',async()=>{const l=(await get(listingRef(id))).val();if(!l)throw new Error('Объявление удалено');const photos=l.photos?.length?l.photos:l.photo?[l.photo]:[];const el=modal(l.title,`<div class="v8-gallery">${photos.map(p=>`<img src="${html(safeURL(p))}" loading="lazy" alt="Фото объявления" onclick="openImgViewer(this.src)">`).join('')}</div><div class="v8-listing-price">${l.priceNegotiable?'Цена договорная':money(l.price)}</div><div class="v8-note"><p>${html(l.desc||'Описание не заполнено')}</p><span>${html(l.condition||'')}</span></div><p>Продавец: <button class="v8-link" id="v8Seller">${html(l.seller)}</button></p><p>${html(l.address||'Адрес не указан')}</p>${point(l.sellerLat,l.sellerLng)?'<div id="v8ListingMap" class="v8-map"></div>':'<p class="v8-muted">Доставка недоступна: продавец не указал точку на карте.</p>'}<div class="v8-actions" id="v8ListingActions"></div><div class="v8-legacy-listing">${oldMarketCard({...l,id},l.seller===currentNick,false)}</div>`);qs('v8Seller').onclick=()=>{window.kpCloseSheet();openUserProfile(l.seller);};qs('v8ListingActions').innerHTML=button('Написать продавцу','kpListingChat()','btn btn-primary')+((l.buyer===currentNick&&['sold','meeting_confirmed'].includes(l.status)&&point(l.sellerLat,l.sellerLng))?button('Заказать доставку',`kpDeliveryForListing('${jsEsc(id)}')`,'btn btn-ghost'):'');window.kpListingChat=()=>{window.kpCloseSheet();goToChat(l.seller);};if(point(l.sellerLat,l.sellerLng)){await window.kapaniLoadLeaflet();if(qs('v8ListingMap')){const map=L.map('v8ListingMap').setView([Number(l.sellerLat),Number(l.sellerLng)],16);addSatelliteLayer(map);L.marker([Number(l.sellerLat),Number(l.sellerLng)]).addTo(map);el._onClose=()=>map.remove();}}});
+window.kpOpenListing=id=>action('listing',async()=>{const l=(await get(listingRef(id))).val();if(!l)throw new Error('Объявление удалено');const photos=l.photos?.length?l.photos:l.photo?[l.photo]:[];const el=modal(l.title,`<div class="v8-gallery">${photos.map(p=>`<img src="${html(safeURL(p))}" loading="lazy" alt="Фото объявления" onclick="openImgViewer(this.src)">`).join('')}</div><div class="v8-listing-price">${l.priceNegotiable?'Цена договорная':money(l.price)}</div><div class="v8-note"><p>${html(l.desc||'Описание не заполнено')}</p><span>${html(l.condition||'')}</span></div><p>Продавец: <button class="v8-link" id="v8Seller">${html(l.seller)}</button></p><p>${html(l.address||'Адрес не указан')}</p>${point(l.sellerLat,l.sellerLng)?'<div id="v8ListingMap" class="v8-map"></div>':'<p class="v8-muted">Доставка недоступна: продавец не указал точку на карте.</p>'}<div class="v8-actions" id="v8ListingActions"></div><div class="v8-legacy-listing">${oldMarketCard({...l,id},l.seller===currentNick,false)}</div>`);qs('v8Seller').onclick=()=>{window.kpCloseSheet();openUserProfile(l.seller);};qs('v8ListingActions').innerHTML=button('Написать продавцу','kpListingChat()','btn btn-primary')+((l.buyer===currentNick&&l.status==='sold'&&point(l.sellerLat,l.sellerLng))?button('Заказать доставку',`kpDeliveryForListing('${jsEsc(id)}')`,'btn btn-ghost'):'');window.kpListingChat=()=>{window.kpCloseSheet();goToChat(l.seller);};if(point(l.sellerLat,l.sellerLng)){await window.kapaniLoadLeaflet();if(qs('v8ListingMap')){const map=L.map('v8ListingMap').setView([Number(l.sellerLat),Number(l.sellerLng)],16);addSatelliteLayer(map);L.marker([Number(l.sellerLat),Number(l.sellerLng)]).addTo(map);el._onClose=()=>map.remove();}}});
 window.handleMktPhoto=e=>action('market-photos',async()=>{const files=Array.from(e.target.files||[]);e.target.value='';if(v8.photos.length+files.length>8)throw new Error('Можно добавить не более 8 фотографий');for(const file of files){if(file.size>10*1024*1024)throw new Error('Фото должно быть меньше 10 МБ');const data=await compressImage(file,1400,0.84);const url=await uploadBlobToStorage(await(await fetch(data)).blob(),'market');v8.photos.push(url);}window._mktPhotoData=v8.photos[0];qs('mktPhotoPreview').style.display='block';qs('mktPhotoPreview').innerHTML=`<div class="v8-thumb-grid">${v8.photos.map((p,i)=>`<div><img src="${html(p)}" alt="Фото ${i+1}"><button onclick="kpRemoveListingPhoto(${i})" aria-label="Удалить фото ${i+1}">×</button></div>`).join('')}</div>`;});
 window.kpRemoveListingPhoto=i=>{v8.photos.splice(i,1);window._mktPhotoData=v8.photos[0]||null;qs('mktPhotoPreview').children[0]?.children[i]?.remove();};
 window.kpListingExtras=()=>({photos:v8.photos.slice(),condition:qs('v8Condition')?.value||'',address:qs('v8ListingAddress')?.value||'',...(v8.listingPoint?{sellerLat:v8.listingPoint.lat,sellerLng:v8.listingPoint.lng}:{})});
@@ -14092,7 +14087,7 @@ window.kpSaveListingPoint=()=>{const state=qs('v8ListingPicker')?._locationState
 // receiving data updates in a hidden holder.
 const appointments=qs('hospitalMyAppointments');if(appointments){const card=appointments.closest('.card');card.classList.add('v8-appointment-history');card.hidden=true;const shortcut=document.createElement('button');shortcut.className='btn btn-ghost v8-history-button';shortcut.textContent='Мои записи →';shortcut.onclick=async()=>{await renderHospital();modal('Мои записи',appointments.innerHTML);};qs('hospital')?.prepend(shortcut);}
 async function service(kind,act,id,data={}){const result=await rpc('kp_service_v8',{p_kind:kind,p_action:act,p_id:id,p_data:data});void refreshBalance();return result;}
-window.confirmHospitalBooking=()=>action('hospital-book',async()=>{if(!_hospBookingServiceId)throw new Error('Выберите услугу');const data={serviceId:_hospBookingServiceId,date:qs('hospitalBookDate').value,time:qs('hospitalBookTime').value};const key='hospital:'+JSON.stringify(data);await service('hospital','create',requestID(key),data);v8.requests.delete(key);cancelHospitalBookingForm();await renderHospital();toast('Запись создана. Оплата зарезервирована до подтверждения приёма.','green');});
+window.confirmHospitalBooking=()=>action('hospital-book',async()=>{if(!_hospBookingServiceId)throw new Error('Выберите услугу');const doctor=await getHospitalDoctorFresh();if(doctor?.nick===currentNick)throw new Error('Нельзя записаться на приём к самому себе. Для проверки нужен аккаунт пациента.');const data={serviceId:_hospBookingServiceId,date:qs('hospitalBookDate').value,time:qs('hospitalBookTime').value};const key='hospital:'+JSON.stringify(data);await service('hospital','create',requestID(key),data);v8.requests.delete(key);cancelHospitalBookingForm();await renderHospital();toast('Запись создана. Оплата зарезервирована до подтверждения приёма.','green');});
 window.cancelHospitalAppointment=id=>{if(confirm('Отменить запись? Зарезервированная оплата вернётся на счёт.'))return action('hospital:'+id,async()=>{await service('hospital','cancel',id);await renderHospital();window.kpCloseSheet();toast('Запись отменена, средства возвращены','green');});};
 window.clientConfirmHospitalAppointment=id=>action('hospital:'+id,async()=>{await service('hospital','confirm',id);await renderHospital();window.kpCloseSheet();toast('Приём подтверждён и оплачен','green');});
 window.doctorAcceptAppointment=id=>action('hospital:'+id,async()=>{await service('hospital','start',id);await renderHospitalPanel();});
@@ -14102,14 +14097,52 @@ window.doctorCompleteAppointment=id=>action('hospital:'+id,async()=>{await servi
 // Map-first taxi. Coordinates are selected in order and the price is recomputed
 // independently by PostgreSQL. There are no arbitrary address suggestions.
 ['tFrom','tTo'].forEach(id=>{const el=qs(id);if(el){el.readOnly=true;el.removeAttribute('onkeydown');el.placeholder=id==='tFrom'?'1. Выберите, откуда вас забрать':'2. Выберите, куда поехать';}});
+let taxiQuote=null,taxiQuoteSerial=0;
+const taxiCoordinates=()=>fromCoords&&toCoords?[fromCoords.lat,fromCoords.lng,toCoords.lat,toCoords.lng]:null;
+const taxiFormula=document.createElement('div');
+taxiFormula.id='v9FareMethod';
+taxiFormula.className='v9-fare-explain';
+taxiFormula.textContent='Тариф 250 ₽/км. Расстояние между отметками на карте по прямой, не по автомобильным дорогам.';
+qs('taxiInfoRow')?.after(taxiFormula);
+const calcTaxiBeforeV9=updateTaxiCalc;
+updateTaxiCalc=function(){
+  calcTaxiBeforeV9();
+  const coords=taxiCoordinates();
+  taxiQuote=null;const sequence=++taxiQuoteSerial;
+  if(!coords)return;
+  if(qs('btnCallTaxi'))qs('btnCallTaxi').disabled=true;
+  taxiFormula.textContent='Сверяем расстояние и цену с сервером…';
+  rpc('kp_service_quote_v8',{p_kind:'taxi',p_from_lat:coords[0],p_from_lng:coords[1],p_to_lat:coords[2],p_to_lng:coords[3]}).then(quote=>{
+    if(sequence!==taxiQuoteSerial)return;
+    taxiQuote={coords:coords.join(','),price:Number(quote.price)};
+    qs('tDist').textContent=Number(quote.distanceKm).toFixed(2);
+    qs('tPrice').textContent=String(quote.price);
+    if(qs('btnCallTaxi'))qs('btnCallTaxi').disabled=false;
+    taxiFormula.textContent='Проверенная сервером стоимость ' + money(quote.price) + ', расстояние ' + Number(quote.distanceKm).toFixed(2) + ' км по прямой (формула гаверсинуса). По дорогам путь может быть длиннее.';
+  }).catch(e=>{
+    if(sequence!==taxiQuoteSerial)return;
+    taxiFormula.textContent='Не удалось рассчитать сумму на сервере: '+errorText(e.message);
+    if(qs('btnCallTaxi'))qs('btnCallTaxi').disabled=true;
+  });
+};
 const initMapV7=window.initTaxiMap;window.initTaxiMap=async()=>{const map=await initMapV7();if(!fromCoords){selectingPoint='from';qs('btnFromMap')?.classList.add('selecting');}return map;};
 onMapClick=function(e){const {lat,lng}=e.latlng;if(!selectingPoint)selectingPoint=fromCoords?'to':'from';if(selectingPoint==='from'){setFromPoint(lat,lng);qs('tFrom').value=`${lat.toFixed(5)}, ${lng.toFixed(5)}`;selectingPoint='to';qs('btnFromMap').classList.remove('selecting');qs('btnToMap').classList.add('selecting');toast('Теперь отметьте на карте место назначения','green');}else{if(!fromCoords)return;setToPoint(lat,lng);qs('tTo').value=`${lat.toFixed(5)}, ${lng.toFixed(5)}`;selectingPoint=null;qs('btnToMap').classList.remove('selecting');}};
-window.orderTaxi=()=>action('taxi-create',async()=>{if(!fromCoords||!toCoords)throw new Error('Отметьте две точки на карте');const data={clientLat:fromCoords.lat,clientLng:fromCoords.lng,destLat:toCoords.lat,destLng:toCoords.lng,info:qs('tFrom').value+' → '+qs('tTo').value};const key='taxi:'+JSON.stringify(data);const order=await service('taxi','create',requestID(key),data);v8.requests.delete(key);toast(order.worker?'Водитель назначен. Оплата зарезервирована.':'Ищем свободного водителя. Оплата зарезервирована.','green');});
+window.orderTaxi=()=>action('taxi-create',async()=>{if(!fromCoords||!toCoords)throw new Error('Отметьте две точки на карте');const coords=taxiCoordinates();if(!taxiQuote||taxiQuote.coords!==coords.join(','))throw new Error('Дождитесь точного расчёта цены на сервере');const data={clientLat:fromCoords.lat,clientLng:fromCoords.lng,destLat:toCoords.lat,destLng:toCoords.lng,quotedPrice:taxiQuote.price,info:qs('tFrom').value+' → '+qs('tTo').value};const key='taxi:'+JSON.stringify(data);const order=await service('taxi','create',requestID(key),data);v8.requests.delete(key);toast('Зарезервировано '+money(order.price)+'. '+(order.worker?'Водитель назначен.':'Ищем водителя.'),'green');});
 window.takeOrder=id=>action('taxi:'+id,()=>service('taxi','take',id));
 window.beginTaxiTrip=id=>action('taxi:'+id,()=>service('taxi','start',id));
 window.finishTaxiTrip=id=>action('taxi:'+id,async()=>{await service('taxi','finish',id);window.stopSharingLocation();});
 window.payOrder=id=>action('taxi:'+id,async()=>{await service('taxi','confirm',id);toast('Поездка оплачена из зарезервированных средств','green');});
 window.cancelOrder=id=>{if(confirm('Отменить заказ? До начала поездки зарезервированная оплата возвращается полностью.'))return action('taxi:'+id,async()=>{await service('taxi','cancel',id);toast('Заказ отменён, средства возвращены','green');});};
+const abandonPriorV9=window.abandonOrder;
+window.abandonOrder=id=>action('taxi-release:'+id,async()=>{
+  const o=(await get(orderRef(id))).val();
+  if(o?.type!=='taxi')return abandonPriorV9(id);
+  if(!confirm('Вернуть заказ другим водителям? Пассажир продолжит ждать машину.'))return;
+  await service('taxi','release',id);
+  window.stopSharingLocation();
+  toast('Заказ снова ищет водителя','green');
+  await window.renderDriverOrders?.();
+});
 let v8GeoWatch=null,lastGeo=0;
 window.startSharingLocation=()=>{if(v8GeoWatch!==null||!navigator.geolocation)return;v8GeoWatch=navigator.geolocation.watchPosition(async p=>{if(Date.now()-lastGeo<10000)return;lastGeo=Date.now();try{const all=(await get(ordersRef())).val()||{};const order=Object.values(all).find(o=>o.worker===currentNick&&['driver_arriving','accepted','in_progress'].includes(o.status));if(order)await service('taxi','location',order.id,{lat:p.coords.latitude,lng:p.coords.longitude});}catch(e){console.warn(e);}},()=>{toast('Разрешите доступ к местоположению для показа машины','gold');},{enableHighAccuracy:true,maximumAge:10000});};
 window.stopSharingLocation=()=>{if(v8GeoWatch!==null)navigator.geolocation.clearWatch(v8GeoWatch);v8GeoWatch=null;};
@@ -14119,7 +14152,7 @@ if(qs('driverPage')){const el=document.createElement('label');el.className='v8-s
 // Delivery catalog: store first, then its products; purchased marketplace goods
 // are available for a new delivery after cancelling the previous delivery.
 deliveryBusinessOptions=()=>Object.entries(allBusinessesCache||{}).map(([id,b])=>({...b,id})).filter(b=>b.status==='active'&&b.delivery===true&&point(b.lat,b.lng)&&Object.keys(b.products||{}).length);
-deliveryMarketplaceOptions=()=>Object.entries(lastMarketListings||{}).map(([id,l])=>({...l,id})).filter(l=>l.buyer===currentNick&&['sold','meeting_confirmed'].includes(l.status)&&point(l.sellerLat,l.sellerLng)&&!['work','service'].includes(l.category));
+deliveryMarketplaceOptions=()=>Object.entries(lastMarketListings||{}).map(([id,l])=>({...l,id})).filter(l=>l.buyer===currentNick&&l.status==='sold'&&point(l.sellerLat,l.sellerLng)&&!['work','service'].includes(l.category));
 const optionsV7=window.renderDeliveryOrderOptions;
 window.renderDeliveryOrderOptions=renderDeliveryOrderOptions=async function(force=false){await optionsV7(force);let host=qs('v8DeliveryCatalog');if(!host){host=document.createElement('div');host.id='v8DeliveryCatalog';qs('deliveryOrderPage')?.prepend(host);}if(!host)return;const businesses=deliveryBusinessOptions();const listings=deliveryMarketplaceOptions();host.innerHTML=`<div class="v8-delivery-hero"><span class="v8-eyebrow">Капани рядом</span><h2>Всё нужное —<br>к вашей двери</h2><p>Выберите магазин или свою покупку.<br>Доставка — 200 ₽ за километр.</p></div><h3>Бизнесы с доставкой</h3><div class="v8-business-grid">${businesses.map(b=>`<button class="v8-business" onclick="kpDeliveryBusiness('${jsEsc(b.id)}')"><img src="${html(b.banner?safeURL(b.banner):'assets/delivery-forest.webp')}" alt="" loading="lazy"><span><b>${html(b.name)}</b><small>${html(b.category||'Товары и услуги')} · ${Object.keys(b.products||{}).length} товаров</small></span></button>`).join('')||'<p class="v8-empty">Пока нет бизнесов с доставкой и точкой на карте.</p>'}</div><h3>Мои покупки на маркетплейсе</h3><div class="v8-purchased">${listings.map(l=>`<button class="btn btn-ghost" onclick="kpDeliveryForListing('${jsEsc(l.id)}')">${html(l.title)} →</button>`).join('')||'<p class="v8-muted">Здесь появятся оплаченные или подтверждённые продавцом покупки с точкой на карте.</p>'}</div>`;};
 window.kpDeliveryBusiness=id=>{qs('deliveryOrderSource').value='business';updateDeliverySourceHint();qs('deliveryOrderBiz').value=id;updateDeliveryBizProducts();const b=allBusinessesCache[id];modal(b.name,`<div class="v8-product-grid">${Object.entries(b.products||{}).filter(([,p])=>p.available!==false).map(([pid,p])=>`<article class="v8-product">${p.photo?`<img src="${html(safeURL(p.photo))}" alt="${html(p.name)}" loading="lazy">`:''}<h3>${html(p.name)}</h3><p>${html(p.desc||'')}</p><strong>${money(p.price)}</strong>${button('Выбрать',`kpChooseDeliveryProduct('${jsEsc(pid)}')`,'btn btn-ghost')}</article>`).join('')}</div>`);};
@@ -14138,8 +14171,22 @@ window.confirmCustomDeliveryPrice=id=>action('delivery:'+id,async()=>{toast('О�
 // client-side before the settlement. Existing casino money is not imported.
 const games={roulette:{title:'Roulette',sub:'Европейская рулетка',desc:'37 чисел. Красное и чёрное — ×2, зеро — ×36. Выплата включает ставку.',art:'roulette',choices:[['red','Красное'],['black','Чёрное'],['zero','Зеро']]},slots:{title:'Forest Gems',sub:'Три грани удачи',desc:'Три одинаковых символа — ×12. Ровно два одинаковых — ×1,5. Выплата округляется вниз.',art:'gems',choices:[]},dice:{title:'Lucky Six',sub:'Точный бросок',desc:'Выберите число от 1 до 6. За верный прогноз выплата ×5,7, включая ставку.',art:'dice',choices:[1,2,3,4,5,6].map(n=>[String(n),String(n)])},wheel:{title:'Green Wheel',sub:'Колесо Капани',desc:'20 равновероятных секторов: 11 ×0, 5 ×1, 2 ×2 и 2 ×5. Выплата включает ставку.',art:'wheel',choices:[]}};
 window.kapaniRenderCasino=async()=>{const host=qs('casino');if(!host)return;host.innerHTML=`<div class="v8-casino-top"><div><span class="v8-eyebrow">KAPANI CLUB</span><h2>Игровой зал</h2></div><button class="v8-balance" onclick="kpCasinoWallet()"><small>Игровой баланс</small><strong id="v8CasinoBalance">—</strong><span>Пополнить +</span></button></div><div class="v8-casino-banner"><div><span class="v8-eyebrow">Вечер в Капани</span><h2>Ваш ход.<br>Новая история.</h2><p>Четыре игры. Один игровой счёт.</p><button class="btn btn-ghost" onclick="kpCasinoMusic()" id="v8MusicButton">Включить музыку</button></div><img src="assets/casino-roulette.svg" alt="Рулетка"></div><div class="v8-section-label"><h3>Выберите игру</h3><span>Ставка до 1 000 ₽</span></div><div class="v8-game-grid">${Object.entries(games).map(([id,g])=>`<button class="v8-game-card" onclick="kpOpenGame('${id}')"><img src="assets/casino-${g.art}.svg" alt="" loading="lazy"><div><small>KAPANI ORIGINAL</small><h3>${g.title}</h3><p>${g.sub}</p></div></button>`).join('')}</div><div id="v8CasinoError" role="status"></div><div class="v8-note">Только игровая валюта Капани. Результат каждого раунда рассчитывается на сервере. Пополнение — до 10 000 ₽ в день, оборот ставок — до 20 000 ₽ в день. Выигрыш не гарантирован.</div><details class="v8-credits"><summary>Музыка и правила</summary><p>“Backbay Lounge” Kevin MacLeod (incompetech.com). Licensed under Creative Commons: By Attribution 4.0 License. <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.</p><p>Новый защищённый игровой счёт начинается с нуля. Старые подозрительные выигрыши не переносятся автоматически; основной счёт не изменяется.</p></details>`;try{v8.casino=await rpc('kp_casino_v8',{p_action:'view'});qs('v8CasinoBalance').textContent=money(v8.casino.balance);}catch(e){qs('v8CasinoError').textContent=errorText(e.message);}};
-window.kpCasinoWallet=()=>{modal('Баланс казино',`<div class="v8-wallet"><span class="v8-eyebrow">Игровой счёт · RUB</span><strong>${money(v8.casino?.balance)}</strong><p>Основной счёт: ${money(v8.casino?.main)}</p><label>Сумма<input type="number" id="v8CasinoAmount" min="1" max="10000" step="1" placeholder="Например, 500"></label><div class="v8-actions">${button('Пополнить','kpCasinoMove("deposit")')}${button('Вывести','kpCasinoMove("withdraw")','btn btn-ghost')}</div><p class="v8-muted">Пополнение и вывод — только между вашими игровыми счетами. Комиссии нет.</p></div>`);};
-window.kpCasinoMove=kind=>action('casino-money',async()=>{const amount=Number(qs('v8CasinoAmount').value);if(!Number.isSafeInteger(amount)||amount<1||amount>10000)throw new Error('Введите сумму от 1 до 10 000 ₽');const key=`casino:${kind}:${amount}`;await rpc('kp_casino_v8',{p_action:kind,p_id:requestID(key),p_amount:amount});v8.requests.delete(key);window.kpCloseSheet();await window.kapaniRenderCasino();void refreshBalance();});
+window.kpCasinoWallet=()=>{modal('Баланс казино',`<div class="v8-wallet"><span class="v8-eyebrow">Игровой счёт · RUB</span><strong>${money(v8.casino?.balance)}</strong><p>Основной счёт: ${money(v8.casino?.main)}</p><label>Сумма перевода<input type="number" id="v8CasinoAmount" min="1" max="10000" step="1" inputmode="numeric" placeholder="Например, 500"></label><div class="v8-actions">${button('Пополнить','kpCasinoMove("deposit")')}${button('Вывести','kpCasinoMove("withdraw")','btn btn-ghost')}</div><p id="v8CasinoTransferStatus" role="status" class="v8-muted">Пополнение и вывод — между основным и игровым счетами. Комиссии нет. Дневной предел пополнения 10 000 ₽.</p></div>`);};
+window.kpCasinoMove=kind=>action('casino-money',async()=>{
+  const amount=Number(qs('v8CasinoAmount')?.value),status=qs('v8CasinoTransferStatus');
+  if(!Number.isSafeInteger(amount)||amount<1||amount>10000){if(status)status.textContent='Введите целую сумму от 1 до 10 000 ₽';return;}
+  if(!['deposit','withdraw'].includes(kind))return;
+  const key=`casino:${kind}:${amount}`;
+  if(status)status.textContent='Проверяем остаток и выполняем перевод на сервере...';
+  try{
+    const result=await rpc('kp_casino_v8',{p_action:kind,p_id:requestID(key),p_amount:amount});
+    if(!result||!Number.isFinite(Number(result.balance)))throw new Error('Сервер не подтвердил изменение игрового баланса');
+    v8.requests.delete(key);v8.casino=result;
+    if(status)status.textContent='Перевод подтверждён сервером';
+    window.kpCloseSheet();await window.kapaniRenderCasino();await refreshBalance();
+    toast(kind==='deposit'?'Игровой счёт пополнен':'Средства возвращены на основной счёт','green');
+  }catch(e){if(status)status.textContent='Ошибка перевода: '+errorText(e.message);throw e;}
+});
 window.kpOpenGame=id=>{v8.game=id;const g=games[id];modal(g.title,`<div class="v8-game-stage"><img src="assets/casino-${g.art}.svg" alt="${html(g.sub)}"><div id="v8RoundResult" aria-live="polite">${g.sub}</div></div><p class="v8-muted">${g.desc}</p><label>Ставка<input id="v8Stake" type="number" value="100" min="1" max="1000" step="1"></label>${g.choices.length?`<label>Ваш выбор<select id="v8GameChoice">${g.choices.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></label>`:''}${button('Играть','kpPlayGame()')}<p class="v8-muted">После отправки раунд нельзя отменить. При потере связи нажмите ещё раз: повторная ставка не спишется.</p>`);};
 window.kpPlayGame=()=>action('casino-round',async()=>{const amount=Number(qs('v8Stake').value),choice=qs('v8GameChoice')?.value||null,game=v8.game;if(!Number.isSafeInteger(amount)||amount<1||amount>1000)throw new Error('Ставка: от 1 до 1 000 ₽');const key=`round:${game}:${choice}:${amount}`;const stage=qs('v8RoundResult');stage.textContent='Раунд идёт…';stage.closest('.v8-game-stage').classList.add('playing');try{const result=await rpc('kp_casino_v8',{p_action:'play',p_id:requestID(key),p_amount:amount,p_game:game,p_choice:choice});v8.requests.delete(key);const gems=['◆','●','▲','■','⬟','✦'];const value=Array.isArray(result.outcome)?result.outcome.map(n=>gems[n]).join('  '):(game==='wheel'?'×':'')+result.outcome;stage.innerHTML=`<b>${html(value)}</b><span>${result.payout?`Выплата ${money(result.payout)}`:'Без выигрыша'}</span><small>Баланс: ${money(result.balance)}</small>`;v8.casino={...(v8.casino||{}),...result};if(qs('v8CasinoBalance'))qs('v8CasinoBalance').textContent=money(result.balance);}finally{stage.closest('.v8-game-stage')?.classList.remove('playing');}});
 const casinoAudio=new Audio('assets/backbay-lounge.mp3');casinoAudio.loop=true;casinoAudio.volume=.22;
@@ -14219,7 +14266,7 @@ async function bizOrder(act,bid,id,data={}){const o=await rpc('kp_business_order
 window.checkoutBizCart=bid=>action('biz-checkout',async()=>{const cart=Object.fromEntries(Object.entries(getBizCart(bid)).map(([id,p])=>[id,Number(p.qty)]));const key='cart:'+bid+JSON.stringify(cart);await bizOrder('create',bid,requestID(key),{cart});v8.requests.delete(key);bizCarts[bid]={};await openBizDetail(bid);toast('Оплата зарезервирована. Подтвердите получение после выдачи заказа.','green');});
 window.confirmBizOrderReceipt=(bid,id)=>action('biz-order:'+id,async()=>{await bizOrder('confirm',bid,id);toast('Подтверждение сохранено','green');await renderBizOrdersForBiz(bid,(await get(bizItemRef(bid))).val());await renderBizOrdersForBiz(bid,(await get(bizItemRef(bid))).val(),'owner');await window.renderHomeBizOrders?.();});
 window.kpCancelBizOrder=(bid,id)=>{if(confirm('Отменить заказ и вернуть зарезервированную оплату?'))return action('biz-order:'+id,async()=>{await bizOrder('cancel',bid,id);await renderBizOrdersForBiz(bid,(await get(bizItemRef(bid))).val());await window.renderHomeBizOrders?.();toast('Оплата возвращена','green');});};
-function bizOrderCard(bid,o,b){const mine=(o.client||o.clientNick)===currentNick,owner=b?.owner===currentNick,pending=o.status==='paid_waiting_receipt';return `<article class="v8-application"><div class="v8-eyebrow">${html(o.bizName||b?.name||'Заказ')}</div><h3>${money(o.total||o.amount)}</h3><p>${(o.items||[]).map(x=>`${html(x.name)} × ${Number(x.qty)}`).join(' · ')}</p><p class="v8-muted">${o.status==='completed'?'Получен и оплачен':o.status==='cancelled'?'Отменён, оплата возвращена':pending?'Оплата зарезервирована':'Заказ предыдущей версии'}</p>${pending?`<p>Выдача: ${o.ownerConfirmed?'подтверждена':'ожидается'} · Получение: ${o.clientConfirmed?'подтверждено':'ожидается'}</p><div class="v8-actions">${(mine&&!o.clientConfirmed||owner&&!o.ownerConfirmed)?button(mine?'Я получил заказ':'Заказ выдан',`confirmBizOrderReceipt('${jsEsc(bid)}','${jsEsc(o.id)}')`):''}${mine&&!o.ownerConfirmed?button('Отменить',`kpCancelBizOrder('${jsEsc(bid)}','${jsEsc(o.id)}')`,'btn btn-ghost'):''}</div>`:''}</article>`;}
+function bizOrderCard(bid,o,b){const mine=(o.client||o.clientNick)===currentNick,owner=b?.owner===currentNick,staff=owner||!!b?.employees?.[currentNick],pending=o.status==='paid_waiting_receipt';return `<article class="v8-application"><div class="v8-eyebrow">${html(o.bizName||b?.name||'Заказ')}</div><h3>${money(o.total||o.amount)}</h3><p>${(o.items||[]).map(x=>`${html(x.name)} × ${Number(x.qty)}`).join(' · ')}</p><p class="v8-muted">${o.status==='completed'?'Получен и оплачен':o.status==='cancelled'?'Отменён, оплата возвращена':pending?'Оплата зарезервирована':'Заказ предыдущей версии'}</p>${pending?`<p>Выдача: ${o.ownerConfirmed?'подтверждена':'ожидается'} · Получение: ${o.clientConfirmed?'подтверждено':'ожидается'}</p><div class="v8-actions">${(mine&&!o.clientConfirmed||staff&&!mine&&!o.ownerConfirmed)?button(mine?'Я получил заказ':'Заказ выдан',`confirmBizOrderReceipt('${jsEsc(bid)}','${jsEsc(o.id)}')`):''}${mine&&!o.ownerConfirmed?button('Отменить',`kpCancelBizOrder('${jsEsc(bid)}','${jsEsc(o.id)}')`,'btn btn-ghost'):''}</div>`:''}</article>`;}
 renderBizOrdersForBiz=async function(bid,b,mode='detail'){const el=qs(mode==='owner'?'bizOwnerOrders':mode==='home'?'homeBizOrders':'bizDPanel3');if(!el)return;const orders=(await get(bizOrdersRef(bid))).val()||{};el.innerHTML=Object.entries(orders).sort(([,a],[,b])=>(b.createdAt||0)-(a.createdAt||0)).map(([id,o])=>bizOrderCard(bid,{...o,id},b)).join('')||'<div class="v8-empty">Заказов пока нет</div>';};
 window.renderHomeBizOrders=async()=>{const el=qs('homeBizOrders');if(!el)return;const all=(await get(ref(db,'bizOrders'))).val()||{};el.innerHTML=Object.entries(all).flatMap(([bid,orders])=>Object.entries(orders).filter(([,o])=>o.client===currentNick&&!['completed','cancelled'].includes(o.status)).map(([id,o])=>bizOrderCard(bid,{...o,id},allBusinessesCache[bid]))).join('')||'<p class="v8-muted">Активных заказов нет</p>';};
 async function bizMoney(act,target=null){const amount=Number(prompt(act==='salary'?'Зарплата со счёта бизнеса (₽)':act==='assistant_salary'?'Зарплата помощнику с вашего счёта (₽)':act==='deposit'?'Пополнить счёт бизнеса со своего счёта (₽)':'Вывести со счёта бизнеса (₽)'));if(!Number.isSafeInteger(amount)||amount<1)return;const key=`bizmoney:${act}:${currentBizId}:${target}:${amount}`;await rpc('kp_business_finance_v8',{p_action:act,p_id:requestID(key),p_biz:currentBizId||null,p_target:target,p_amount:amount});v8.requests.delete(key);await refreshBalance();toast('Операция выполнена','green');if(act!=='assistant_salary')await renderBizOwnerPanel();}
@@ -14227,6 +14274,34 @@ window.bizDeposit=()=>action('biz-money',()=>bizMoney('deposit'));
 window.bizWithdraw=()=>action('biz-money',()=>bizMoney('withdraw'));
 window.payEmployee=nick=>action('biz-money',()=>bizMoney('salary',nick));
 window.payHospitalAssistantSalary=()=>action('assistant-salary',async()=>{const assistant=await getHospitalAssistantFresh();if(!assistant)throw new Error('Помощник не назначен');await bizMoney('assistant_salary',assistant.nick);});
+// Automatic salaries are never computed or credited in the browser.
+processBizAutoSalaries=async function(bizId){
+  const result=await rpc('kp_business_payroll_v8',{p_biz:bizId});
+  return Number(result?.paid||0)>0;
+};
+window.kpToggleBizRoleSalary=rid=>action('salary-mode:'+rid,async()=>{
+  if(!currentBizId)throw new Error('Выберите бизнес');
+  const b=(await get(bizItemRef(currentBizId))).val();
+  if(b?.owner!==currentNick)throw new Error('Только владелец может менять оплату');
+  const role=b.roles?.[rid];if(!role)throw new Error('Роль не найдена');
+  const next=normalizeRoleMode(role)==='auto'?'manual':'auto';
+  if(next==='auto'&&!confirm('Автозарплата будет выплачиваться из баланса бизнеса при открытии владельцем панели, если пришёл срок. Продолжить?'))return;
+  await update(bizItemRef(currentBizId),{['roles/'+rid]:{...role,salaryMode:next,salaryType:next}});
+  await renderBizOwnerPanel();
+});
+// Legacy taxiHistory is not written by the secured service; read real orders.
+renderTaxiHistory=async function(){
+  const card=qs('taxiHistory'),list=qs('taxiHistoryList');
+  if(!card||!list||!currentNick)return;
+  try{
+    const all=(await get(ordersRef())).val()||{};
+    const rides=Object.entries(all).map(([id,o])=>({...o,id}))
+      .filter(o=>o.type==='taxi'&&o.client===currentNick&&['paid','cancelled'].includes(o.status))
+      .sort((a,b)=>(b.paidAt||b.updatedAt||b.createdAt||0)-(a.paidAt||a.updatedAt||a.createdAt||0)).slice(0,20);
+    card.style.display=rides.length?'block':'none';
+    list.innerHTML=rides.map(o=>'<div class="v9-ledger-row"><span><b>'+html(o.info||'Поездка')+'</b><small>'+new Date(o.paidAt||o.createdAt||Date.now()).toLocaleString('ru-RU')+' · '+html(o.worker||'Водитель не назначен')+'</small></span><strong>'+money(o.price||0)+'<small>'+(o.status==='paid'?'Оплачено':'Отменено и возвращено')+'</small></strong></div>').join('');
+  }catch(e){console.warn('[Kapani taxi history]',e);card.style.display='none';}
+};
 
 async function civic(kind,data={}){const key='civic:'+kind+JSON.stringify(data);const o=await rpc('kp_civic_v8',{p_action:'submit',p_kind:kind,p_id:requestID(key),p_data:data});v8.requests.delete(key);await refreshBalance();toast(kind==='bike'?'Права получены':'Заявка сохранена и отправлена в мэрию','green');return o;}
 window.kapaniBuyBikeLicense=()=>action('civic-bike',async()=>{if(!confirm('Купить права на велосипед за 250 ₽?'))return;await civic('bike');window.kapaniRenderLicenses?.();});
@@ -14242,9 +14317,136 @@ window.kpLoadCivic=async()=>{if(currentNick!==ADMIN)return;let host=qs('v8Civic'
 
 window.payoutJanitorSubmission=id=>window.kpReviewCivic('janitor',id,true);window.rejectJanitorSubmission=id=>window.kpReviewCivic('janitor',id,false);
 
+// V10: subscription payments/gifts and news are protected PostgreSQL actions.
+// Browser code must never write balance or privileged branches directly.
+const v10Wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function v10PaymentWindow(label,operation){
+  modal('Оплата подписки',`<div class="v10-payment-stage">
+    <div class="v10-payment-card"><span>Капани Банк</span><strong>Виртуальная карта Капани</strong><small>Оплата капанёвскими деньгами, не банковской картой</small></div>
+    <div class="v10-payment-mark" id="v10PaymentMark"><div class="v10-payment-spinner"></div></div>
+    <h3 id="v10PaymentCaption">Читаем данные карты...</h3>
+    <p class="v8-muted" id="v10PaymentInfo">${html(label)}</p>
+    <div class="v10-payment-progress"><span id="v10PaymentBar"></span></div>
+    <p class="v8-muted">Закрытие окна не отменяет подтверждённую сервером операцию.</p>
+  </div>`);
+  let response=null,failure=null;
+  const pendingOperation=operation().then(value=>{response=value;},error=>{failure=error;});
+  const captions=['Читаем данные карты...','Производим оплату','Почти...','Ещё чуть-чуть'];
+  for(let i=0;i<captions.length;i++){
+    if(failure)break;
+    if(qs('v10PaymentCaption'))qs('v10PaymentCaption').textContent=captions[i];
+    if(qs('v10PaymentBar'))qs('v10PaymentBar').style.width=((i+1)*23)+'%';
+    await v10Wait(1000);
+  }
+  await pendingOperation;
+  if(failure){
+    if(qs('v10PaymentCaption'))qs('v10PaymentCaption').textContent='Оплата не прошла';
+    if(qs('v10PaymentInfo'))qs('v10PaymentInfo').textContent=errorText(failure.message||'Ошибка сервера');
+    qs('v10PaymentMark')?.classList.add('failed');
+    throw failure;
+  }
+  if(qs('v10PaymentCaption'))qs('v10PaymentCaption').textContent='Готово';
+  if(qs('v10PaymentInfo'))qs('v10PaymentInfo').textContent='Сервер подтвердил списание и сохранил подписку';
+  if(qs('v10PaymentBar'))qs('v10PaymentBar').style.width='100%';
+  const mark=qs('v10PaymentMark');if(mark){mark.classList.add('done');mark.innerHTML='<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M15 33l12 12 23-26"/></svg>';}
+  await v10Wait(850);
+  return response;
+}
+window.buySubscription=type=>action('v10-subscription-buy',async()=>{
+  if(!['plus','ultra','prime'].includes(type))throw new Error('Неизвестная подписка');
+  const price=getSubscriptionPrice(type),name=CONFIG.subscriptions[type].name;
+  if(!confirm('Оплатить «'+name+'» за '+money(price)+' на 7 дней?'))return;
+  const key='subscription:buy:'+type;
+  const result=await v10PaymentWindow(name,()=>rpc('kp_subscription_v10',{
+    p_action:'buy',p_id:requestID(key),p_plan:type,p_recipient:null
+  }));
+  if(!result?.success)throw new Error('Сервер не подтвердил покупку');
+  v8.requests.delete(key);
+  await refreshBalance();await renderSubscription();
+  window.renderMarketplace?.();toast('Подписка оплачена','green');
+});
+window.sendGiftSubscription=()=>action('v10-subscription-gift',async()=>{
+  const type=giftSubscriptionType,recipient=qs('giftRecipient')?.value;
+  if(!recipient||!['plus','ultra','prime'].includes(type))throw new Error('Выберите подписку и получателя');
+  const name=CONFIG.subscriptions[type].name,price=getSubscriptionPrice(type);
+  if(!confirm('Подарить '+name+' пользователю '+recipient+' за '+money(price)+'?'))return;
+  const key='subscription:gift:'+type+':'+recipient;
+  const result=await v10PaymentWindow('Подарок '+name,()=>rpc('kp_subscription_v10',{
+    p_action:'gift',p_id:requestID(key),p_plan:type,p_recipient:recipient
+  }));
+  if(!result?.success)throw new Error('Сервер не подтвердил подарок');
+  v8.requests.delete(key);
+  closeGiftSubscriptionModal();await refreshBalance();await renderSubscription();
+  toast('Подписка подарена '+recipient,'green');
+});
+window.cancelSubscription=()=>action('v10-subscription-cancel',async()=>{
+  if(!confirm('Отключить продление? Оплаченная подписка останется до конца срока.'))return;
+  const key='subscription:cancel';
+  await rpc('kp_subscription_v10',{p_action:'cancel',p_id:requestID(key),p_plan:null,p_recipient:null});
+  v8.requests.delete(key);await refreshBalance();await renderSubscription();
+  toast('Продление отключено. Оплаченный срок сохранён.','green');
+});
+window.publishNews=()=>action('v10-news-publish',async()=>{
+  const scope=qs('newsScope')?.value||currentNewsTab;
+  if(!canPublishNews(scope))throw new Error('Нет прав на публикацию новостей');
+  const title=qs('newsTitle')?.value.trim(),content=qs('newsContent')?.value.trim();
+  if(!title||!content)throw new Error('Заполните заголовок и текст');
+  const data={scope,title,content,category:qs('newsCategory')?.value||'general',
+    imageUrl:window._newsPhotoData||qs('newsImage')?.value.trim()||null,
+    videoUrl:window._newsVideoUrl||null};
+  const key='news-publish:'+JSON.stringify([scope,title,content]);
+  const news=await rpc('kp_news_v10',{p_action:'publish',p_news_id:requestID(key),p_message_id:null,p_data:data});
+  v8.requests.delete(key);
+  void enqueuePushJob({type:'news',id:String(news.id),sender:currentNick});
+  void notifyAllUsersOfNews(news).catch(console.warn);
+  if(qs('newsTitle'))qs('newsTitle').value='';
+  if(qs('newsContent'))qs('newsContent').value='';
+  if(qs('newsImage'))qs('newsImage').value='';
+  window._newsPhotoData=null;window._newsVideoUrl=null;
+  if(qs('newsImagePreview'))qs('newsImagePreview').style.display='none';
+  if(qs('newsVideoPreview'))qs('newsVideoPreview').style.display='none';
+  await window.renderNews();toast('Новость опубликована','green');
+});
+window.deleteNews=id=>action('v10-news-delete:'+id,async()=>{
+  if(!confirm('Удалить эту новость?'))return;
+  await rpc('kp_news_v10',{p_action:'delete',p_news_id:id,p_message_id:null,p_data:{}});
+  await window.renderNews();toast('Новость удалена','green');
+});
+markNewsRead=async id=>{
+  try{await rpc('kp_news_v10',{p_action:'read',p_news_id:id,p_message_id:null,p_data:{}});}
+  catch(e){console.warn('[news read]',e);}
+};
+window.sendNewsDiscussionMsg=async(text,mediaData,msgType)=>{
+  if(!currentNewsId)return false;
+  const key='news-comment:'+currentNewsId;
+  try{
+    await rpc('kp_news_v10',{p_action:'comment_send',p_news_id:currentNewsId,
+      p_message_id:requestID(key),p_data:{text:text||'',mediaData:mediaData||null,msgType:msgType||null}});
+    v8.requests.delete(key);return true;
+  }catch(e){toast('Комментарий не отправлен: '+errorText(e.message),'red');return false;}
+};
+window.sendNewsMsg=async()=>{
+  const inp=qs('newsInput'),message=(inp?.value||'').trim();
+  if(!message||!currentNewsId)return;
+  if(await window.sendNewsDiscussionMsg(message,null,null))inp.value='';
+};
+window.deleteNewsMsg=id=>action('v10-news-comment-delete',async()=>{
+  if(!currentNewsId||!confirm('Удалить комментарий?'))return;
+  await rpc('kp_news_v10',{p_action:'comment_delete',p_news_id:currentNewsId,p_message_id:id,p_data:{}});
+  delete currentNewsMsgs[id];window.renderNewsDiscussionMessages(currentNewsMsgs);
+});
+window.saveEditNews=id=>action('v10-news-comment-edit',async()=>{
+  const value=qs('newseditText_'+id)?.value.trim();
+  if(!value||!currentNewsId)throw new Error('Введите текст комментария');
+  await rpc('kp_news_v10',{p_action:'comment_edit',p_news_id:currentNewsId,p_message_id:id,p_data:{text:value}});
+  qs('newsedit_'+id).style.display='none';
+  if(currentNewsMsgs[id])currentNewsMsgs[id].text=value;
+  window.renderNewsDiscussionMessages(currentNewsMsgs);
+});
+
 // Navigation hook refreshes balances and stops audio when the casino is left.
 const navV7=window.navTo;window.navTo=function(id,...args){if(id==='shop')id='jobs';if(id!=='casino')casinoAudio.pause();const r=navV7(id,...args);if(id==='adminPage')void action('civic-load',()=>window.kpLoadCivic());if(id==='profile')applySettings(allUsersCache[currentNick]?.settings);if(id==='bank'&&qs('v8BankBalance'))qs('v8BankBalance').textContent=money(allUsersCache[currentNick]?.balance);if(id==='driverPage'&&qs('v8TaxiOnline'))qs('v8TaxiOnline').checked=!!allUsersCache[currentNick]?.settings?.taxiOnline;return r;};
-document.documentElement.dataset.kapaniRevision='8';
+document.documentElement.dataset.kapaniRevision='11';
 window.KAPANI_V8_READY=true;
 
 };

@@ -61,7 +61,7 @@ end; $$;
 
 -- Restricted editors for existing business, racing and hospital interfaces.
 create or replace function public.kp_content_v8(p_operation text,p_path text,p_payload jsonb default null) returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor(); p text[]:=string_to_array(p_path,'/');b text;d jsonb;old jsonb;v jsonb;k text;u jsonb;
+declare a text:=public.kp_v8_actor(); p text[]:=string_to_array(p_path,'/');b text;d jsonb;old jsonb;v jsonb;k text;u jsonb;entity jsonb;product record;max_price bigint;max_count integer;
 begin
  if a is null then raise exception 'Authentication required';end if;
  b:=p[1];if p_operation not in ('set','update','remove') then raise exception 'Invalid operation';end if;
@@ -71,6 +71,12 @@ begin
  old:=d #> p[2:cardinality(p)];
  if b in ('races','raceDayGroups','rentBuildings') then
    if a<>'Кайон' or cardinality(p)<2 then raise exception 'Mayor access required';end if;
+   if b='rentBuildings' and cardinality(p)<>2 then raise exception 'Choose a building';end if;
+   if b='rentBuildings' and p_operation='update' then
+     for k in select jsonb_object_keys(p_payload) loop
+       if k not in ('name','weekPrice','photo') then raise exception 'Rental status is managed by the server';end if;
+     end loop;
+   end if;
  elsif b='businesses' then
    if d->p[2]->>'owner' is distinct from a or cardinality(p)<2 then raise exception 'Business owner required';end if;
    if cardinality(p)=2 then
@@ -82,8 +88,12 @@ begin
          continue;
        end if;
        if k not in ('name','desc','address','lat','lng','category','services','icon','banner','delivery','bgEffect','description') then raise exception 'Protected business field: %',k;end if;
+       if k='bgEffect' and p_payload->k not in ('null'::jsonb,'""'::jsonb) then raise exception 'Purchase business decoration via finance service';end if;
      end loop;
    elsif p[3] not in ('products','roles') or cardinality(p)<>4 then raise exception 'Protected business field';end if;
+   if p[3]='roles' and p_operation='remove' and exists(
+      select 1 from jsonb_each(coalesce(d->p[2]->'employees','{}'))e where e.value->>'roleId'=p[4]
+   ) then raise exception 'Dismiss or move employees before deleting their role';end if;
    if p[3]='products' and p_operation<>'remove' then
      v:=coalesce(old,'{}')||p_payload;
      if v->>'price' is null or (v->>'price')::numeric not between 1 and 100000 or length(coalesce(v->>'name','')) not between 1 and 120 then raise exception 'Invalid product';end if;
@@ -119,6 +129,25 @@ begin
      end loop;
    else v:=p_payload;end if;
    d:=public.kp_tree_set_deep(d,p[2:cardinality(p)],v);
+ end if;
+ if b='rentBuildings' and p_operation<>'remove' then
+   entity:=d->p[2];
+   if length(trim(coalesce(entity->>'name',''))) not between 2 and 80 or
+      coalesce(entity->>'weekPrice','') !~ '^[0-9]{1,6}$' or
+      (entity->>'weekPrice')::bigint not between 1 and 100000 or
+      length(coalesce(entity->>'photo',''))>2500000 then raise exception 'Invalid rental advertisement';end if;
+ elsif b='businesses' and p_operation<>'remove' then
+   entity:=d->p[2];
+   max_count:=3+least(100,coalesce((entity->'limitBonus'->>'products')::integer,(entity->'limitBonus'->>'product')::integer,0));
+   max_price:=1000+500*coalesce((entity->'limitBonus'->>'priceCap')::integer,0);
+   if (select count(*) from jsonb_object_keys(coalesce(entity->'products','{}'))) >max_count then raise exception 'Product limit exceeded';end if;
+   for product in select key,value from jsonb_each(coalesce(entity->'products','{}')) loop
+     if length(trim(coalesce(product.value->>'name',''))) not between 1 and 120 or
+       coalesce(product.value->>'price','') !~ '^[0-9]{1,8}$' or
+       (product.value->>'price')::bigint not between 1 and max_price then raise exception 'Product price or name outside permitted limits';end if;
+   end loop;
+   if not public.kp_v8_point(entity->>'lat',entity->>'lng') then raise exception 'Business needs a map location';end if;
+   if length(coalesce(entity->>'name','')) not between 2 and 80 then raise exception 'Business name length exceeded';end if;
  end if;
  perform public.kp_v8_put(b,d);return jsonb_build_object('value',v,'committed',true);
 end; $$;

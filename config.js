@@ -9,7 +9,7 @@ const KAPANI_CONFIG = Object.freeze({
     // Public half matches the live Edge Function secrets. Never place the private half here.
     webPushVapidPublicKey: "BC2-KpOURTy2hZwC6pVNSgu6zbFVohUWuPnK8SOY5-xBupWzspvbhoMaSbp-ya3xB5CZ5IHONm5PQeWSKLyfm8E",
     pushWorkerUrl: "https://npivvwwkdnbeqmjcwrke.supabase.co/functions/v1/kapani-push",
-    admin: { username: "Денис" },
+    admin: { username: "Кайон" },
     jobs: { janitor: "Уборщик", janitorTaskText: "Убрать площадку" },
     finance: { minBalanceAllowed: -2500, pricePerKm: 250, maxSpeedKmh: 30 },
     location: { kapani: { lat: 52.628825753234985, lng: 38.416863347119566 } },

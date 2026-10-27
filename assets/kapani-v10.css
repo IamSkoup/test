@@ -1,0 +1,165 @@
+/* Kapani v10: desktop layout, dialogs and secure payments. Static CSS only. */
+#kpV8Sheet.v8-overlay{
+  position:fixed!important;inset:0!important;left:0!important;right:0!important;
+  top:0!important;bottom:0!important;width:100vw!important;height:100dvh!important;
+  margin:0!important;padding:clamp(12px,3vw,26px)!important;
+  display:flex!important;justify-content:center!important;align-items:center!important;
+  transform:none!important;z-index:300000!important;box-sizing:border-box;
+  background:rgba(1,14,9,.80)!important;backdrop-filter:blur(10px);
+}
+#kpV8Sheet > .v8-sheet{
+  position:relative!important;margin:auto!important;left:auto!important;right:auto!important;
+  width:min(560px,100%)!important;max-width:100%!important;max-height:calc(100dvh - 48px);
+  border:1px solid rgba(144,207,156,.34)!important;
+  background:linear-gradient(145deg,#163c2a 0%,#0d251c 55%,#0a1d16 100%)!important;
+  box-shadow:0 32px 105px rgba(0,0,0,.7)!important;
+}
+#kpV8Sheet .v8-sheet-body{width:100%;min-width:0;box-sizing:border-box;}
+
+/* The main app body is a horizontal flex container. Dialog roots must occupy
+   the viewport independently of the body and must center their own panels. */
+#userProfileModal.open,#historyModal.open,#giftSubModal,
+#passportModal,#passportFormModal,#profileCustomizerModal > div{
+  position:fixed!important;inset:0!important;width:100vw!important;
+  height:100dvh!important;margin:0!important;box-sizing:border-box!important;
+  display:flex!important;align-items:center!important;justify-content:center!important;
+  padding:clamp(12px,3vw,24px)!important;
+  transform:none!important;
+}
+#userProfileModal.open>.user-profile-sheet,
+#historyModal.open>.history-sheet,
+#profileCustomizerModal .kapani-customizer-sheet{
+  position:relative!important;margin:auto!important;
+  left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;
+  width:min(560px,100%)!important;max-height:calc(100dvh - 36px)!important;
+  border-radius:23px!important;border:1px solid rgba(149,211,164,.32)!important;
+  background:linear-gradient(145deg,#153b29,#0b251a)!important;
+  box-shadow:0 24px 80px #000a!important;overflow-y:auto!important;
+}
+#historyModal.open>.history-sheet{overflow:hidden!important;height:min(72dvh,640px)!important;}
+
+@media(min-width:820px){
+  #profile.section.active{
+    display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));
+    align-items:start;gap:16px;max-width:1100px;margin-inline:auto;
+  }
+  #profile > .profile-header{grid-column:1/-1!important;grid-row:auto!important;margin:0!important;}
+  #profile > .v8-profile-actions{grid-column:1/-1!important;}
+  #profile > .v9-profile-more{grid-column:1/-1!important;}
+  #profile > .card:has(#wallFeed){grid-column:1/-1!important;}
+  #profile > button[onclick*="logout"]{grid-column:1/-1;width:min(260px,100%);margin-inline:auto;}
+}
+#profile .profile-header{
+  background:linear-gradient(120deg,rgba(49,113,75,.46),rgba(19,61,41,.7),rgba(12,34,26,.8))!important;
+  border:1px solid rgba(151,220,159,.29)!important;border-radius:22px!important;
+  padding:28px!important;box-sizing:border-box;
+}
+html[data-season] #profile .profile-header{
+  background:linear-gradient(120deg,rgba(49,113,75,.46),rgba(19,61,41,.7),rgba(12,34,26,.8))!important;
+}
+#profile .profile-header>div:nth-child(2){max-width:780px;margin-inline:auto;}
+#profile .v8-profile-actions{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0!important;}
+#profile .v8-profile-actions>.btn{height:64px!important;min-height:64px!important;font-size:13px!important;font-weight:700;}
+#profile .v9-profile-more{margin:0!important;background:rgba(13,46,30,.75)!important;}
+#profile .v9-profile-more summary{padding:12px!important;}
+#profile > .card{min-width:0;min-height:0;overflow:hidden;border:1px solid rgba(131,193,141,.17);}
+#profile > .card:has(#inboxList){min-height:180px;}
+#profile .p-name{margin-top:6px;font-size:clamp(24px,3vw,32px)!important;}
+#profile .profile-header #profileDescription{max-width:500px;margin-inline:auto;}
+#profile .profile-header .btn{font-size:12px;}
+
+#giftSubModal{
+  background:rgba(2,18,11,.84)!important;backdrop-filter:blur(8px);
+  justify-content:center!important;align-items:center!important;
+  padding:16px!important;z-index:250000!important;
+}
+#giftSubModal > div{
+  background:linear-gradient(145deg,#17442e 0%,#0d2b1f 62%,#0b221a 100%)!important;
+  border:1px solid rgba(161,221,162,.4)!important;
+  border-radius:24px!important;width:min(490px,100%)!important;
+  max-height:calc(100dvh - 32px)!important;padding:25px!important;
+  box-shadow:0 30px 90px rgba(0,0,0,.65)!important;
+}
+#giftSubModal > div > div:nth-child(2){
+  background:linear-gradient(120deg,rgba(66,136,88,.35),rgba(28,74,48,.58))!important;
+  border-color:rgba(160,222,167,.38)!important;
+}
+#giftSubModal > div > div:nth-child(2) [style*="color:"]{color:#b8dfb7!important;}
+#giftSubModal select{background:#183d2a!important;border:1px solid #4e7f60!important;color:#f3f7ef!important;}
+#giftSubModal > div > div:nth-child(4){background:rgba(52,120,78,.3)!important;}
+
+#passportModal,#passportFormModal{background:rgba(1,14,9,.83)!important;backdrop-filter:blur(7px);}
+#passportModal > div,#passportFormModal > div{
+  background:linear-gradient(150deg,#1b4b32 0%,#103022 55%,#0a2119 100%)!important;
+  border:1px solid rgba(150,218,165,.5)!important;
+  box-shadow:0 24px 90px rgba(0,0,0,.65)!important;
+}
+#passportModalBody > div[style*="background:"]{
+  background:linear-gradient(140deg,rgba(69,139,90,.25),rgba(23,74,46,.23))!important;
+  border-color:rgba(154,219,162,.36)!important;
+}
+#passportModal [style*="color:var(--primary)"],#passportFormModal [style*="color:var(--primary)"]{color:#b1dfb4!important;}
+
+#market #v8MarketSearch{
+  display:block!important;width:100%!important;max-width:none!important;
+  border:1px solid rgba(148,213,161,.35)!important;
+  background:linear-gradient(120deg,rgba(26,68,44,.95),rgba(13,43,31,.98))!important;
+  color:#f2f7ee!important;padding:15px 18px 15px 46px!important;
+  margin:12px 0 20px!important;font-size:15px!important;
+  box-shadow:0 10px 24px rgba(0,0,0,.16);
+}
+#market #v8MarketSearch::placeholder{color:#a1bda6;}
+#market .v8-listing,#market .v8-listing-open{min-width:0;width:100%;box-sizing:border-box;}
+#market .v8-listing-open{display:flex;flex-direction:column;overflow:hidden;}
+#market .v8-listing-photo{width:100%;flex-shrink:0;}
+#market .v8-listing-info{width:100%;min-width:0;flex:1;box-sizing:border-box;overflow:hidden;}
+#market .v8-listing-info h3,#market .v8-listing-info small{
+  overflow-wrap:anywhere;word-break:normal;max-width:100%;
+}
+#marketListings> :not(.v8-listing){grid-column:1/-1!important;justify-self:stretch;text-align:center;padding:30px;}
+#hospitalPanelServices .item-row{gap:12px;flex-wrap:wrap;}
+#hospitalPanelServices .item-row>div:first-child{flex:1 1 230px;min-width:0;}
+#hospitalPanelServices button{white-space:nowrap;}
+
+.v10-payment-stage{text-align:center;padding:12px 0 4px;}
+.v10-payment-stage h3{font-size:23px;line-height:1.3;min-height:32px;color:#eff7e9;margin:18px 0 7px;}
+.v10-payment-stage p{font-size:12px;line-height:1.6;}
+.v10-payment-card{
+  width:min(310px,100%);min-height:130px;border-radius:18px;margin:0 auto 24px;
+  background:linear-gradient(125deg,#376e4c,#183f31 65%,#123224);
+  border:1px solid rgba(179,232,172,.34);box-shadow:0 20px 48px #0005;
+  padding:18px;text-align:left;display:flex;flex-direction:column;justify-content:space-between;
+}
+.v10-payment-card span{font-size:13px;font-weight:900;letter-spacing:.09em;color:#eaf5df;}
+.v10-payment-card strong{font-size:17px;color:#f3f8e8;}
+.v10-payment-card small{font-size:10px;color:#c6ddc1;}
+.v10-payment-mark{height:74px;width:74px;margin:0 auto;border-radius:50%;display:grid;place-items:center;background:#234d35;}
+.v10-payment-spinner{height:35px;width:35px;border:3px solid #fff3;border-top-color:#a6dfaa;border-radius:50%;animation:v10-spin .9s linear infinite;}
+.v10-payment-mark.done{background:linear-gradient(135deg,#9ad5a4,#4f9970);animation:v10-pop .5s cubic-bezier(.18,1.6,.4,1) both;}
+.v10-payment-mark.failed{background:#673b36;}
+.v10-payment-mark svg{width:48px;height:48px;fill:none;stroke:#102e20;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;}
+.v10-payment-mark.done path{stroke-dasharray:65;stroke-dashoffset:65;animation:v10-draw .7s .14s forwards;}
+.v10-payment-progress{height:7px;border-radius:99px;margin:23px auto 12px;max-width:310px;background:#e1f5df20;overflow:hidden;}
+.v10-payment-progress>span{height:100%;width:0;display:block;background:linear-gradient(90deg,#649f75,#b1df99);border-radius:inherit;transition:width .7s ease;}
+@keyframes v10-spin{to{transform:rotate(360deg);}}
+@keyframes v10-pop{from{transform:scale(.55);opacity:.2;}to{transform:scale(1);opacity:1;}}
+@keyframes v10-draw{to{stroke-dashoffset:0;}}
+@media(max-width:760px){
+  #kpV8Sheet.v8-overlay{padding:12px!important;align-items:center!important;justify-content:center!important;}
+  #kpV8Sheet>.v8-sheet{width:100%!important;max-height:calc(100dvh - 24px)!important;border-radius:23px!important;margin:auto!important;}
+  #giftSubModal{align-items:center!important;padding:12px!important;}
+  #giftSubModal>div{max-height:calc(100dvh - 24px)!important;border-radius:23px!important;margin:auto!important;}
+  #userProfileModal.open,#historyModal.open,#profileCustomizerModal>div{
+    align-items:center!important;justify-content:center!important;padding:12px!important;
+  }
+  #userProfileModal.open>.user-profile-sheet,#historyModal.open>.history-sheet,
+  #profileCustomizerModal .kapani-customizer-sheet{margin:auto!important;max-height:calc(100dvh - 24px)!important;border-radius:23px!important;}
+  #profile.section.active{grid-template-columns:1fr!important;}
+  #profile .v8-profile-actions{gap:7px;}
+  #profile .v8-profile-actions>.btn{font-size:11px!important;min-height:60px!important;height:60px!important;}
+  #profile .profile-header{padding:22px 15px!important;}
+  #marketListings{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+}
+@media(prefers-reduced-motion:reduce){
+  .v10-payment-spinner,.v10-payment-mark.done,.v10-payment-mark.done path{animation:none!important;}
+}

@@ -3,7 +3,7 @@ create table if not exists public.kp_v8_finance_ops(id uuid primary key,actor te
 alter table public.kp_v8_finance_ops enable row level security;
 revoke all on public.kp_v8_finance_ops from anon,authenticated;
 create or replace function public.kp_business_finance_v8(p_action text,p_id uuid,p_biz text default null,p_amount bigint default 0,p_target text default null) returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();d jsonb;u jsonb;b jsonb;bal bigint;args jsonb;result jsonb;old public.kp_v8_finance_ops%rowtype;receiver text;
+declare a text:=public.kp_v8_actor();d jsonb;u jsonb;b jsonb;bal bigint;args jsonb;result jsonb;old public.kp_v8_finance_ops%rowtype;receiver text;unit_price bigint;qty integer;bonus jsonb;effect_name text;
 begin
  if a is null or p_id is null or p_amount is null or p_amount not between 1 and 100000 then raise exception 'Amount must be 1 to 100000';end if;
  select document into u from public.kp_tree_roots where branch='users' for update;
@@ -26,13 +26,67 @@ begin
      receiver:=case when p_action='withdraw' then a else p_target end;
      if p_action='salary' and (p_target is null or b->'employees'->p_target is null) then raise exception 'Employee required';end if;
      perform public.kp_v8_money(receiver,p_amount,p_id,'business_'||p_action,jsonb_build_object('bizId',p_biz));bal:=bal-p_amount;
+   elsif p_action='upgrade' then
+     receiver:=split_part(coalesce(p_target,''),':',1);
+     qty:=nullif(split_part(coalesce(p_target,''),':',2),'')::integer;
+     unit_price:=case receiver when 'employee' then 350 when 'product' then 250 when 'priceCap' then 400 else null end;
+     if qty is null or qty not between 1 and 20 or unit_price is null or p_amount<>unit_price*qty or bal<p_amount then raise exception 'Invalid upgrade cost or business funds';end if;
+     bonus:=coalesce(b->'limitBonus','{}'::jsonb);
+     receiver:=case receiver when 'employee' then 'employees' when 'product' then 'products' else 'priceCap' end;
+     bonus:=jsonb_set(bonus,array[receiver],to_jsonb(least(100,coalesce((bonus->>receiver)::integer,0)+qty)),true);
+     b:=b||jsonb_build_object('limitBonus',bonus);bal:=bal-p_amount;
+   elsif p_action='effect' then
+     effect_name:=coalesce(p_target,'');
+     unit_price:=case effect_name when 'shimmer' then 199 when 'particles' then 249 when 'aurora' then 399 when 'fire' then 449 when 'plasma' then 499 when 'galaxy' then 549 when 'thunder' then 699 when 'hologram' then 749 when 'dragon' then 849 when 'prime' then 899 else null end;
+     if unit_price is null or unit_price<>p_amount or effect_name=coalesce(b->>'bgEffect','') or bal<p_amount then raise exception 'Invalid effect purchase';end if;
+     b:=b||jsonb_build_object('bgEffect',effect_name);bal:=bal-p_amount;
    else raise exception 'Unknown business operation';end if;
    b:=b||jsonb_build_object('balance',bal);perform public.kp_v8_put('businesses',jsonb_set(d,array[p_biz],b));
+   insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+     values('finance:'||p_id::text,p_biz,a,case when p_action='deposit' then p_amount else -p_amount end,bal,p_action,jsonb_build_object('target',p_target));
  end if;
  result:=jsonb_build_object('ok',true,'balance',bal);
  insert into public.kp_v8_finance_ops(id,actor,args,result)values(p_id,a,args,result);
- if p_target is not null then perform public.kp_v8_notify(p_target,'Получена зарплата: '||p_amount||' ₽','money','salary_'||p_id::text);end if;
+ if p_action in ('salary','assistant_salary') and p_target is not null then perform public.kp_v8_notify(p_target,'Получена зарплата: '||p_amount||' ₽','money','salary_'||p_id::text);end if;
  return result;
+end; $$;
+
+-- No cron is assumed: the owner explicitly triggers due automatic salaries
+-- when visiting the business panel. Payout and journal update in one transaction.
+create or replace function public.kp_business_payroll_v8(p_biz text) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();d jsonb;b jsonb;employees jsonb;emp record;role jsonb;
+ amount bigint;bal bigint;last_paid bigint;due_ms bigint;now_ms bigint:=(extract(epoch from now())*1000)::bigint;
+ op uuid;count_paid integer:=0;
+begin
+ perform 1 from public.kp_tree_roots where branch='users' for update;
+ select document into d from public.kp_tree_roots where branch='businesses' for update;
+ b:=d->p_biz;
+ if a is null or b is null or b->>'owner' is distinct from a or b->>'status'<>'active' then raise exception 'Business owner required';end if;
+ employees:=coalesce(b->'employees','{}');bal:=coalesce((b->>'balance')::bigint,0);
+ for emp in select key,value from jsonb_each(employees) loop
+   role:=b->'roles'->(emp.value->>'roleId');
+   if role is null or coalesce(role->>'salaryMode',role->>'salaryType','manual') not in ('auto','automatic','авто') then continue;end if;
+   if coalesce(role->>'salaryAmount','') !~ '^[0-9]{1,6}$' then continue;end if;
+   amount:=(role->>'salaryAmount')::bigint;
+   if amount<1 or amount>100000 then continue;end if;
+   due_ms:=case when role->>'salaryPeriod' in ('week','weekly','неделю') then 604800000 else 86400000 end;
+   last_paid:=coalesce((emp.value->>'salaryPaidAt')::bigint,(emp.value->>'joinedAt')::bigint,now_ms);
+   if now_ms-last_paid<due_ms or bal<amount then continue;end if;
+   op:=(md5('payroll:'||p_biz||':'||emp.key||':'||last_paid))::uuid;
+   perform public.kp_v8_money(emp.key,amount,op,'business_auto_salary',jsonb_build_object('bizId',p_biz,'role',role->>'name'));
+   bal:=bal-amount;
+   employees:=public.kp_tree_set_deep(employees,array[emp.key,'salaryPaidAt'],to_jsonb(now_ms));
+   insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+     values('auto:'||op::text,p_biz,a,-amount,bal,'auto_salary',jsonb_build_object('employee',emp.key,'role',role->>'name'));
+   perform public.kp_v8_notify(emp.key,'Автозарплата из «'||coalesce(b->>'name','Бизнес')||'»: '||amount||' ₽','money','payroll_'||op::text);
+   count_paid:=count_paid+1;
+ end loop;
+ if count_paid>0 then
+   b:=b||jsonb_build_object('employees',employees,'balance',bal);
+   perform public.kp_v8_put('businesses',jsonb_set(d,array[p_biz],b));
+ end if;
+ return jsonb_build_object('paid',count_paid,'balance',bal);
 end; $$;
 
 -- All civic requests have one durable, reviewable record. Protected rewards
@@ -106,4 +160,6 @@ begin
 end; $$;
 revoke all on function public.kp_business_finance_v8(text,uuid,text,bigint,text),public.kp_civic_v8(text,text,text,jsonb) from public,anon;
 grant execute on function public.kp_business_finance_v8(text,uuid,text,bigint,text),public.kp_civic_v8(text,text,text,jsonb) to authenticated;
+revoke all on function public.kp_business_payroll_v8(text) from public,anon;
+grant execute on function public.kp_business_payroll_v8(text) to authenticated;
 commit;

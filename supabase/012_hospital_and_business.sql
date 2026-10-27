@@ -1,4 +1,25 @@
 begin;
+-- Business balances are independent accounts, backed by their own journal.
+-- Pre-existing balances are retained; missing historical entries are not invented.
+create table if not exists public.kp_v8_business_ledger(
+ id text primary key,biz_id text not null,actor text not null,
+ amount bigint not null,balance_after bigint not null,kind text not null,
+ details jsonb not null default '{}'::jsonb,created_at timestamptz not null default now()
+);
+create index if not exists kp_v8_business_ledger_biz_idx on public.kp_v8_business_ledger(biz_id,created_at desc);
+alter table public.kp_v8_business_ledger enable row level security;
+revoke all on public.kp_v8_business_ledger from public,anon,authenticated;
+create or replace function public.kp_business_statement_v8(p_biz text) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();b jsonb;lines jsonb;
+begin
+ select document->p_biz into b from public.kp_tree_roots where branch='businesses';
+ if a is null or b is null or (a<>b->>'owner' and a<>'Кайон') then raise exception 'Business owner required';end if;
+ select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at desc),'[]') into lines from
+   (select id,biz_id,actor,amount,balance_after,kind,details,created_at from public.kp_v8_business_ledger
+    where biz_id=p_biz order by created_at desc limit 100)e;
+ return jsonb_build_object('balance',coalesce((b->>'balance')::bigint,0),'lines',lines);
+end; $$;
 create or replace function public.kp_hospital_view() returns jsonb language plpgsql stable security definer set search_path='' as $$
 declare a text:=public.kp_v8_actor();d jsonb;apps jsonb;assistant_apps jsonb;staff boolean;
 begin
@@ -62,7 +83,7 @@ begin
        if exists(select 1 from jsonb_each(u)e where public.kp_v8_role(e.key,'Помощник врача')) or coalesce((u->target->>'kveScore')::integer,0)<80 then raise exception 'Assistant unavailable';end if;
        jobs:=jobs||jsonb_build_array(jsonb_build_object('id','muni_Помощник врача','type','municipal','role','Помощник врача'));
      else
-       if b->'roles'->role_id is null or b->'employees' ? target or (select count(*) from jsonb_object_keys(coalesce(b->'employees','{}')))>=coalesce((b->>'employeeLimit')::integer,5) then raise exception 'Vacancy unavailable';end if;
+       if b->'roles'->role_id is null or b->'employees' ? target or (select count(*) from jsonb_object_keys(coalesce(b->'employees','{}')))>=3+least(100,coalesce((b->'limitBonus'->>'employees')::integer,(b->'limitBonus'->>'employee')::integer,0)) then raise exception 'Vacancy unavailable';end if;
        b:=public.kp_tree_set_deep(b,array['employees',target],jsonb_build_object('roleId',role_id,'roleName',role_name,'joinedAt',at_ms));
        jobs:=jobs||jsonb_build_array(jsonb_build_object('id','biz_'||(p_data->>'bizId'),'type','business','bizId',p_data->>'bizId','bizName',b->>'name','role',role_name));
      end if;
@@ -87,7 +108,7 @@ begin
  root:=public.kp_tree_set_deep(root,path,app);perform public.kp_v8_put(branch_name,root);return app;
 end; $$;
 create or replace function public.kp_business_order_v8(p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();u jsonb;b jsonb;root jsonb;o jsonb;items jsonb:='[]';entry record;product jsonb;qty integer;total bigint:=0;owner text;at_ms bigint:=(extract(epoch from now())*1000)::bigint;bid text:=p_data->>'bizId';
+declare a text:=public.kp_v8_actor();u jsonb;b jsonb;root jsonb;o jsonb;items jsonb:='[]';entry record;product jsonb;qty integer;total bigint:=0;owner text;at_ms bigint:=(extract(epoch from now())*1000)::bigint;bid text:=p_data->>'bizId';biz_root jsonb;biz_balance bigint;
 begin
  if a is null or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid order';end if;
  select document into u from public.kp_tree_roots where branch='users' for update;
@@ -109,12 +130,19 @@ begin
    perform public.kp_v8_money(a,-total,(md5(p_id||':biz-reserve'))::uuid,'business_order_reserve',jsonb_build_object('bizId',bid));
    o:=jsonb_build_object('id',p_id,'bizId',bid,'bizName',b->>'name','client',a,'clientNick',a,'owner',owner,'items',items,'total',total,'amount',total,'status','paid_waiting_receipt','escrowAmount',total,'clientConfirmed',false,'ownerConfirmed',false,'createdAt',at_ms);
  elsif p_action='confirm' then
-   if o is null or (a is distinct from o->>'client' and a<>owner) then raise exception 'Order participant required';end if;
+   if o is null or (a is distinct from o->>'client' and a<>owner and b->'employees'->a is null) then raise exception 'Order participant or employee required';end if;
    if o->>'status'='completed' then return o;end if;
    if o->>'status'<>'paid_waiting_receipt' then raise exception 'Invalid order state';end if;
-   o:=o||case when a=owner then '{"ownerConfirmed":true}'::jsonb else '{"clientConfirmed":true}'::jsonb end;
+   o:=o||case when a=o->>'client' then '{"clientConfirmed":true}'::jsonb else '{"ownerConfirmed":true}'::jsonb end;
    if o->>'ownerConfirmed'='true' and o->>'clientConfirmed'='true' then
-     perform public.kp_v8_money(owner,(o->>'escrowAmount')::bigint,(md5(p_id||':biz-paid'))::uuid,'business_sale',jsonb_build_object('bizId',bid));
+     -- Both parties confirmed: credit the business account atomically.
+     select document into biz_root from public.kp_tree_roots where branch='businesses' for update;
+     b:=biz_root->bid;biz_balance:=coalesce((b->>'balance')::bigint,0)+(o->>'escrowAmount')::bigint;
+     if biz_balance>1000000000 then raise exception 'Business account limit';end if;
+     b:=b||jsonb_build_object('balance',biz_balance);
+     perform public.kp_v8_put('businesses',jsonb_set(biz_root,array[bid],b));
+     insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+       values('order:'||bid||':'||p_id,bid,a,(o->>'escrowAmount')::bigint,biz_balance,'sale',jsonb_build_object('client',o->>'client','orderId',p_id));
      o:=o||jsonb_build_object('status','completed','escrowAmount',0,'payoutDone',true,'paidAt',at_ms);
    end if;
  elsif p_action='cancel' then
@@ -128,6 +156,8 @@ begin
  return o;
 end; $$;
 revoke all on function public.kp_v8_notify(text,text,text,text) from public,anon,authenticated;
+revoke all on function public.kp_business_statement_v8(text) from public,anon;
+grant execute on function public.kp_business_statement_v8(text) to authenticated;
 revoke all on function public.kp_employment_v8(text,text,jsonb),public.kp_business_order_v8(text,text,jsonb) from public,anon;
 grant execute on function public.kp_employment_v8(text,text,jsonb),public.kp_business_order_v8(text,text,jsonb) to authenticated;
 commit;

@@ -1,4 +1,4 @@
--- КАПАНИ: безопасное обновление существующей базы (миграции 008–013).
+-- КАПАНИ: безопасное обновление существующей базы (миграции 008–015).
 -- Сначала сделайте резервную копию Supabase. Проверьте, что это проект Kapani.
 -- Требует установленную схему 001–007 и защищённые таблицы kp_profiles, kp_wallets, kp_ledger.
 -- Не применяйте файл к чистой базе.
@@ -13,9 +13,12 @@ begin
  if not exists(select 1 from pg_extension where extname='pgcrypto') then raise exception 'pgcrypto extension is required.';end if;
 end $preflight$;
 
+
+
+
 -- ===== 008_access_and_profiles.sql =====
 -- Apply after 001–007. Additive: no accounts, balances or requests are deleted.
-
+begin;
 create or replace function public.kp_v8_actor() returns text language sql stable security definer set search_path='' as $$
  select nickname from public.kp_profiles where user_id=auth.uid();
 $$;
@@ -133,9 +136,11 @@ end; $$;
 revoke all on function public.kp_v8_actor(),public.kp_v8_role(text,text),public.kp_v8_put(text,jsonb),public.kp_v8_public_profile(jsonb),public.kp_v8_point(text,text) from public,anon,authenticated;
 revoke all on function public.kp_market_action(text,text,jsonb) from public,anon;
 grant execute on function public.kp_market_action(text,text,jsonb) to authenticated;
+commit;
 
 
 -- ===== 010_casino_and_events.sql =====
+begin;
 create table if not exists public.kp_v8_casino_accounts(user_id uuid primary key, balance bigint not null default 0 check(balance between 0 and 1000000), day date, deposits bigint not null default 0, wagers bigint not null default 0, last_round timestamptz);
 create table if not exists public.kp_v8_casino_ops(id uuid primary key,user_id uuid not null,args jsonb not null,result jsonb not null,created_at timestamptz not null default now());
 create table if not exists public.kp_v8_events(id uuid primary key,title text not null,kind text not null,sides jsonb not null,closes_at timestamptz not null,status text not null default 'open',winner integer,budget bigint not null,liability bigint not null default 0,created_at timestamptz not null default now());
@@ -288,295 +293,32 @@ end; $$;
 revoke all on function public.kp_v8_random(integer),public.kp_v8_money(text,bigint,uuid,text,jsonb) from public,anon,authenticated;
 revoke all on function public.kp_casino_v8(text,uuid,bigint,text,text),public.kp_events_v8(text,uuid,jsonb) from public,anon;
 grant execute on function public.kp_casino_v8(text,uuid,bigint,text,text),public.kp_events_v8(text,uuid,jsonb) to authenticated;
-
-
--- ===== 009_services.sql =====
--- Install after 010 (uses kp_v8_money). See INSTALL.sql for the correct order.
-
-create or replace function public.kp_v8_distance(a numeric,b numeric,c numeric,d numeric) returns numeric language sql immutable set search_path='' as $$
- select (6371*2*asin(least(1,sqrt(power(sin(radians((c-a)::double precision)/2),2)+cos(radians(a::double precision))*cos(radians(c::double precision))*power(sin(radians((d-b)::double precision)/2),2)))))::numeric;
-$$;
-create or replace function public.kp_service_v8(p_kind text,p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor(); branch_name text; root jsonb; orders jsonb; o jsonb; users jsonb; u jsonb; b jsonb; item jsonb; m jsonb; doctor text; worker text; supplier text; price bigint; product_price bigint:=0; distance numeric; total bigint; at_ms bigint:=(extract(epoch from now())*1000)::bigint; expected text; entry record;
-begin
- if a is null then raise exception 'Authentication required'; end if;
- if p_kind not in ('taxi','delivery','hospital') or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid service request'; end if;
- branch_name:=case p_kind when 'taxi' then 'orders' when 'delivery' then 'deliveryCustomOrders' else 'hospital' end;
- insert into public.kp_tree_roots(branch) values('users'),(branch_name) on conflict do nothing;
- select document into users from public.kp_tree_roots where branch='users' for update; u:=users->a;
- select document into root from public.kp_tree_roots where branch=branch_name for update;
- orders:=case when p_kind='hospital' then coalesce(root->'appointments','{}') else root end;
- o:=orders->p_id;
- if p_action='create' then
-   if o is not null then
-     if coalesce(o->>'client',o->>'clientNick')<>a then raise exception 'Request belongs to another user'; end if;
-     return o;
-   end if;
-   if coalesce(u->>'accountFrozen','false')='true' or coalesce(u->>'accountVerified','false')<>'true' then raise exception 'Verified active account required'; end if;
-   if p_kind='hospital' then
-     item:=root->'services'->(p_data->>'serviceId');
-     select key into doctor from jsonb_each(users) where public.kp_v8_role(key,'Врач') order by key limit 1;
-     if item is null or item->>'active'='false' or doctor is null or doctor=a then raise exception 'Service unavailable'; end if;
-     if p_data->>'date' is null or (p_data->>'date')::date<(now() at time zone 'Europe/Moscow')::date or (p_data->>'date')::date>(now() at time zone 'Europe/Moscow')::date+90 or coalesce(p_data->>'time','')!~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then raise exception 'Invalid appointment time'; end if;
-     if ((p_data->>'date')||' '||(p_data->>'time'))::timestamp <= now() at time zone 'Europe/Moscow' then raise exception 'Choose a future appointment'; end if;
-     if exists(select 1 from jsonb_each(orders) e where e.value->>'doctorNick'=doctor and e.value->>'date'=p_data->>'date' and e.value->>'time'=p_data->>'time' and e.value->>'status' not in ('cancelled','rejected','paid')) then raise exception 'This time is already booked'; end if;
-     price:=coalesce((item->>'price')::bigint,0);
-     if price not between 0 and 10000 then raise exception 'Invalid service price'; end if;
-     o:=jsonb_build_object('id',p_id,'client',a,'clientNick',a,'clientName',coalesce(u->>'displayName',a),'clientSurname','','worker',doctor,'doctorNick',doctor,'serviceId',p_data->>'serviceId','serviceName',item->>'name','price',price,'date',p_data->>'date','time',p_data->>'time','status','pending','paymentStatus','reserved');
-   else
-     if not public.kp_v8_point(p_data->>'destLat',p_data->>'destLng') then raise exception 'Select destination on map'; end if;
-     if p_kind='taxi' then
-       if not public.kp_v8_point(p_data->>'clientLat',p_data->>'clientLng') then raise exception 'Select pickup on map'; end if;
-       if exists(select 1 from jsonb_each(orders) e where e.value->>'client'=a and e.value->>'type'='taxi' and e.value->>'status' not in ('paid','cancelled','completed')) then raise exception 'You already have an active ride'; end if;
-       distance:=public.kp_v8_distance((p_data->>'clientLat')::numeric,(p_data->>'clientLng')::numeric,(p_data->>'destLat')::numeric,(p_data->>'destLng')::numeric);price:=greatest(1,round(distance*250)::bigint);
-       o:=jsonb_build_object('id',p_id,'client',a,'type','taxi','status','pending','clientLat',p_data->'clientLat','clientLng',p_data->'clientLng','destLat',p_data->'destLat','destLng',p_data->'destLng','price',price,'distanceKm',distance,'info',left(coalesce(p_data->>'info','Поездка по карте'),400));
-       select key into worker from jsonb_each(users) where key<>a and public.kp_v8_role(key,'Водитель') and value->'settings'->>'taxiOnline'='true' and coalesce((value->>'lastSeen')::bigint,0)>at_ms-120000 and not exists(select 1 from jsonb_each(orders) e where e.value->>'worker'=key and e.value->>'status' in ('accepted','driver_arriving','in_progress','waiting_payment')) order by key limit 1;
-       if worker is not null then o:=o||jsonb_build_object('worker',worker,'status','driver_arriving','driverAvatar',users->worker->>'avatar','driverVehicle',users->worker->>'vehicle'); end if;
-     else
-       if p_data->>'source'='business' then
-         select document->(p_data->>'bizId') into b from public.kp_tree_roots where branch='businesses';item:=b->'products'->(p_data->>'productId');
-         if b is null or item is null or b->>'status'<>'active' or coalesce(b->>'delivery','false')<>'true' or item->>'available'='false' or not public.kp_v8_point(b->>'lat',b->>'lng') then raise exception 'Business or product unavailable for delivery'; end if;
-         supplier:=b->>'owner';product_price:=(item->>'price')::bigint;
-         if product_price is null or product_price not between 1 and 100000 then raise exception 'Invalid product price'; end if;
-         o:=jsonb_build_object('source','business','bizId',p_data->>'bizId','productId',p_data->>'productId','from',b->>'name','items',item->>'name','productName',item->>'name','productPrice',product_price,'supplier',supplier,'pickupLat',b->'lat','pickupLng',b->'lng');
-       elsif p_data->>'source'='marketplace' then
-         select document->(p_data->>'listingId') into m from public.kp_tree_roots where branch='marketplace' for update;
-         if m is null or not public.kp_v8_point(m->>'sellerLat',m->>'sellerLng') then raise exception 'Listing has no pickup point'; end if;
-         if m->>'category' in ('service','work') then raise exception 'Only physical goods can be delivered'; end if;
-         if exists(select 1 from jsonb_each(orders) e where e.value->>'listingId'=p_data->>'listingId' and e.value->>'status'<>'cancelled') then raise exception 'Delivery already exists for this purchase'; end if;
-         if m->>'status'='meeting_confirmed' and m->>'buyer'=a then
-           perform public.kp_market_action('purchase',p_data->>'listingId',coalesce(p_data->'purchase','{}'));
-         elsif m->>'status'<>'sold' or m->>'buyer' is distinct from a then raise exception 'Seller must confirm the purchase first'; end if;
-         o:=jsonb_build_object('source','marketplace','listingId',p_data->>'listingId','from',m->>'seller','items',m->>'title','listingTitle',m->>'title','pickupLat',m->'sellerLat','pickupLng',m->'sellerLng');
-       else raise exception 'Select delivery source'; end if;
-       if supplier=a then raise exception 'Cannot purchase your own product'; end if;
-       distance:=public.kp_v8_distance((o->>'pickupLat')::numeric,(o->>'pickupLng')::numeric,(p_data->>'destLat')::numeric,(p_data->>'destLng')::numeric);price:=greatest(1,round(distance*200)::bigint);
-       o:=o||jsonb_build_object('id',p_id,'client',a,'status','waiting','deliveryLat',p_data->'destLat','deliveryLng',p_data->'destLng','deliveryPrice',price,'priceOffer',price,'price',price,'distanceKm',distance,'address',left(coalesce(p_data->>'address','Точка на карте'),200),'notes',left(coalesce(p_data->>'notes',''),1000),'contact',left(coalesce(p_data->>'contact',''),100));
-     end if;
-     if distance<=0 or distance>100 then raise exception 'Route must be between 0 and 100 km'; end if;
-   end if;
-   total:=price+product_price;
-   if total>0 then perform public.kp_v8_money(a,-total,(md5(p_kind||p_id||':reserve'))::uuid,'service_reserve',jsonb_build_object('service',p_kind,'order',p_id));end if;
-   o:=o||jsonb_build_object('escrowAmount',total,'createdAt',at_ms,'updatedAt',at_ms,'clientConfirmed',false,'workerConfirmed',false);
- else
-   if o is null then raise exception 'Order missing'; end if;
-   worker:=o->>'worker';price:=(o->>'price')::bigint;
-   if p_action='take' then
-     if coalesce(o->>'client',o->>'clientNick')=a or not public.kp_v8_role(a,case when p_kind='taxi' then 'Водитель' else 'Доставщик' end) then raise exception 'Worker access required'; end if;
-     if o->>'worker'=a then return o; end if;
-     if o->>'status' not in ('pending','waiting') or worker is not null then raise exception 'Order already assigned'; end if;
-     if exists(select 1 from jsonb_each(orders) e where e.value->>'worker'=a and e.value->>'status' in ('driver_arriving','accepted','client_confirmed','in_progress','waiting_payment','delivered')) then raise exception 'Finish your active order first'; end if;
-     o:=o||jsonb_build_object('worker',a,'status',case when p_kind='taxi' then 'driver_arriving' else 'client_confirmed' end,'driverAvatar',u->>'avatar','driverVehicle',u->>'vehicle','acceptedAt',at_ms);
-   elsif p_action='cancel' then
-     if a is distinct from o->>'client' and a is distinct from worker and a<>'Кайон' and not(p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Not an order participant'; end if;
-     if o->>'status' in ('cancelled','rejected') then return o; end if;
-     if o->>'status' not in ('pending','waiting','accepted','driver_arriving','client_confirmed') then raise exception 'Cannot cancel after service has started'; end if;
-     total:=coalesce((o->>'escrowAmount')::bigint,0);
-     if total>0 then perform public.kp_v8_money(o->>'client',total,(md5(p_kind||p_id||':refund'))::uuid,'service_refund',jsonb_build_object('order',p_id));end if;
-     o:=o||jsonb_build_object('status','cancelled','escrowAmount',0,'paymentStatus','refunded');
-   elsif p_action='location' then
-     if a is distinct from worker or p_kind='hospital' or o->>'status' not in ('driver_arriving','accepted','client_confirmed','in_progress') or not public.kp_v8_point(p_data->>'lat',p_data->>'lng') then raise exception 'Location update unavailable'; end if;
-     o:=o||jsonb_build_object('driverLat',p_data->'lat','driverLng',p_data->'lng','driverLocationUpdatedAt',at_ms);
-   elsif p_action='start' then
-     if a is distinct from worker and not (p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Assigned worker required'; end if;
-     expected:=case when p_kind='hospital' then 'accepted' else 'in_progress' end;
-     if o->>'status'=expected then return o; end if;
-     if o->>'status' not in ('pending','accepted','driver_arriving','client_confirmed') then raise exception 'Invalid order transition'; end if;
-     o:=o||jsonb_build_object('status',expected);
-   elsif p_action='finish' then
-     if a is distinct from worker and not (p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Assigned worker required'; end if;
-     expected:=case p_kind when 'hospital' then 'awaiting_confirmation' when 'taxi' then 'waiting_payment' else 'delivered' end;
-     if o->>'status'=expected then return o; end if;
-     if o->>'status'<>(case when p_kind='hospital' then 'accepted' else 'in_progress' end) then raise exception 'Service has not started'; end if;
-     o:=o||jsonb_build_object('status',expected,'workerConfirmed',true,'doctorConfirmed',true);
-   elsif p_action='confirm' then
-     if a is distinct from o->>'client' then raise exception 'Client confirmation required'; end if;
-     if o->>'status' in ('paid','done') then return o; end if;
-     if o->>'status' not in ('waiting_payment','awaiting_confirmation','delivered') or worker is null then raise exception 'Worker must finish first'; end if;
-     total:=coalesce((o->>'escrowAmount')::bigint,0);product_price:=coalesce((o->>'productPrice')::bigint,0);
-     if total<>price+product_price then raise exception 'Escrow mismatch'; end if;
-     if price>0 then perform public.kp_v8_money(worker,price,(md5(p_kind||p_id||':worker'))::uuid,'service_payout',jsonb_build_object('order',p_id));end if;
-     if product_price>0 then perform public.kp_v8_money(o->>'supplier',product_price,(md5(p_kind||p_id||':product'))::uuid,'business_sale',jsonb_build_object('order',p_id));end if;
-     o:=o||jsonb_build_object('status',case when p_kind='delivery' then 'done' else 'paid' end,'clientConfirmed',true,'clientReceived',true,'paymentStatus','paid','payoutDone',true,'escrowAmount',0,'paidAt',at_ms);
-   else raise exception 'Unknown service action'; end if;
-   o:=o||jsonb_build_object('updatedAt',at_ms);
- end if;
- orders:=jsonb_set(orders,array[p_id],o,true);
- if p_kind='hospital' then root:=jsonb_set(root,'{appointments}',orders,true);else root:=orders;end if;
- perform public.kp_v8_put(branch_name,root);
- if p_action<>'location' then
-   perform public.kp_v8_notify(o->>'client',case p_kind when 'taxi' then 'Такси' when 'delivery' then 'Доставка' else 'Больница' end||': '||case p_action when 'create' then 'заказ создан, оплата зарезервирована' when 'cancel' then 'заказ отменён, оплата возвращена' when 'take' then 'исполнитель назначен' when 'start' then 'выполнение началось' when 'finish' then 'подтвердите получение услуги' else 'оплата завершена' end,'system',p_kind||'_'||p_id||'_'||p_action);
-   if p_action in ('create','take') and o->>'worker' is not null then perform public.kp_v8_notify(o->>'worker','Новый заказ: '||case p_kind when 'taxi' then 'такси' when 'delivery' then 'доставка' else 'приём в больнице' end,'system',p_kind||'_'||p_id||'assigned');end if;
- end if;
- return o;
-end; $$;
-revoke all on function public.kp_v8_distance(numeric,numeric,numeric,numeric) from public,anon,authenticated;
-revoke all on function public.kp_service_v8(text,text,text,jsonb) from public,anon;
-grant execute on function public.kp_service_v8(text,text,text,jsonb) to authenticated;
-
-
--- ===== 011_messages_and_management.sql =====
-create or replace function public.kp_message_v8(p_action text,p_kind text,p_peer text default null,p_id text default null,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor(); b text; conv text; path text[]; root jsonb; msg jsonb; users jsonb; attachment jsonb; reply jsonb; emoji text; target jsonb; idx jsonb; at_ms bigint:=(extract(epoch from now())*1000)::bigint;
-begin
- if a is null or p_kind not in ('chat','dm') or coalesce(p_id,'')!~ '^[A-Za-z0-9_-]{8,100}$' then raise exception 'Invalid message request'; end if;
- if p_kind='dm' then
-   if p_peer is null or not exists(select 1 from public.kp_profiles where nickname=p_peer) then raise exception 'Recipient missing'; end if;
-   conv:=case when a collate "C" < p_peer collate "C" then a||'__dm__'||p_peer else p_peer||'__dm__'||a end;
-   b:='dms';path:=array[conv,'messages',p_id];
- else b:='chat';path:=array[p_id];end if;
- select document into users from public.kp_tree_roots where branch='users';
- insert into public.kp_tree_roots(branch) values(b) on conflict do nothing;
- select document into root from public.kp_tree_roots where branch=b for update;
- msg:=root #> path;
- if p_action='send' then
-   if msg is not null then
-     if msg->>'nick'<>a then raise exception 'Message identifier collision'; end if;
-     return msg;
-   end if;
-   if length(coalesce(p_data->>'text',''))>4000 or jsonb_typeof(coalesce(p_data->'attachments','[]'))<>'array' or jsonb_array_length(coalesce(p_data->'attachments','[]'))>6 then raise exception 'Message limit exceeded'; end if;
-   for attachment in select value from jsonb_array_elements(coalesce(p_data->'attachments','[]')) loop
-     if attachment->>'type' is null or attachment->>'type' not in ('image','video','voice','video_circle','sticker') or coalesce(attachment->>'url','')!~ '^https://' or length(attachment->>'url')>2000 then raise exception 'Invalid attachment'; end if;
-   end loop;
-   msg:=jsonb_build_object('nick',a,'avatar',users->a->>'avatar','text',left(coalesce(p_data->>'text',''),4000),'attachments',coalesce(p_data->'attachments','[]'),'createdAt',at_ms,'time',to_char(now() at time zone 'Europe/Moscow','HH24:MI'));
-   if p_data ? 'replyId' then
-     reply:=root #> (case when p_kind='chat' then array[p_data->>'replyId'] else array[conv,'messages',p_data->>'replyId'] end);
-     if reply is not null then msg:=msg||jsonb_build_object('reply',jsonb_build_object('id',p_data->>'replyId','nick',reply->>'nick','text',left(coalesce(reply->>'text','Вложение'),180)));end if;
-   end if;
-   if p_data ? 'forward' then
-     target:=public.kp_tree_access('read',p_data->'forward'->>'path');reply:=target->'value';
-     if (p_data->'forward'->>'path') !~ '^(chat/[^/]+|dms/[^/]+/messages/[^/]+)$' or reply is null or reply->>'nick' is null then raise exception 'Forwarded message unavailable'; end if;
-     msg:=msg||jsonb_build_object('text',reply->>'text','attachments',coalesce(reply->'attachments',case when reply->>'mediaData' is not null then jsonb_build_array(jsonb_build_object('url',reply->>'mediaData','type',reply->>'msgType')) else '[]'::jsonb end),'forwardedFrom',reply->>'nick');
-   end if;
-   if coalesce(msg->>'text','')='' and jsonb_array_length(msg->'attachments')=0 then raise exception 'Empty message'; end if;
- elsif p_action='reaction' then
-   if msg is null then raise exception 'Message missing'; end if;
-   emoji:=p_data->>'emoji';if emoji not in ('👍','❤️','😂','🔥','😮','😢') then raise exception 'Unsupported reaction'; end if;
-   target:=coalesce(msg->'reactions','{}');
-   if target->>a=emoji then target:=target-a;else target:=jsonb_set(target,array[a],to_jsonb(emoji),true);end if;
-   msg:=msg||jsonb_build_object('reactions',target);
- elsif p_action='edit' then
-   if msg is null or msg->>'nick'<>a then raise exception 'Only author can edit'; end if;
-   if length(trim(coalesce(p_data->>'text',''))) not between 1 and 4000 then raise exception 'Invalid message text';end if;
-   msg:=msg||jsonb_build_object('text',trim(p_data->>'text'),'caption',trim(p_data->>'text'),'edited',true);
- elsif p_action='delete' then
-   if msg is null then return jsonb_build_object('ok',true);end if;
-   if msg->>'nick'<>a then raise exception 'Only author can delete'; end if;
-   root:=root #- path;perform public.kp_v8_put(b,root);return jsonb_build_object('ok',true);
- else raise exception 'Unknown message action';end if;
- root:=public.kp_tree_set_deep(root,path,msg);perform public.kp_v8_put(b,root);
- if p_kind='dm' and p_action='send' then
-   insert into public.kp_tree_roots(branch) values('dmIndex') on conflict do nothing;
-   select document into idx from public.kp_tree_roots where branch='dmIndex' for update;
-   target:=jsonb_build_object('lastTs',at_ms,'latest',msg);
-   idx:=public.kp_tree_set_deep(idx,array[a,p_peer],target||'{"unread":false}');
-   idx:=public.kp_tree_set_deep(idx,array[p_peer,a],target||'{"unread":true}');
-   perform public.kp_v8_put('dmIndex',idx);
- end if;
- return msg;
-end; $$;
-
--- Restricted editors for existing business, racing and hospital interfaces.
-create or replace function public.kp_content_v8(p_operation text,p_path text,p_payload jsonb default null) returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor(); p text[]:=string_to_array(p_path,'/');b text;d jsonb;old jsonb;v jsonb;k text;u jsonb;
-begin
- if a is null then raise exception 'Authentication required';end if;
- b:=p[1];if p_operation not in ('set','update','remove') then raise exception 'Invalid operation';end if;
- select document->a into u from public.kp_tree_roots where branch='users' for update;
- insert into public.kp_tree_roots(branch) values(b) on conflict do nothing;
- select document into d from public.kp_tree_roots where branch=b for update;
- old:=d #> p[2:cardinality(p)];
- if b in ('races','raceDayGroups','rentBuildings') then
-   if a<>'Кайон' or cardinality(p)<2 then raise exception 'Mayor access required';end if;
- elsif b='businesses' then
-   if d->p[2]->>'owner' is distinct from a or cardinality(p)<2 then raise exception 'Business owner required';end if;
-   if cardinality(p)=2 then
-     if p_operation<>'update' then raise exception 'Only business details may be updated';end if;
-     for k in select jsonb_object_keys(p_payload) loop
-       if k ~ '^(products|roles)/[A-Za-z0-9_-]+$' then
-         v:=p_payload->k;
-         if k like 'products/%' and v<>'null'::jsonb and (v->>'price' is null or (v->>'price')::numeric not between 1 and 100000 or length(coalesce(v->>'name','')) not between 1 and 120) then raise exception 'Invalid product';end if;
-         continue;
-       end if;
-       if k not in ('name','desc','address','lat','lng','category','services','icon','banner','delivery','bgEffect','description') then raise exception 'Protected business field: %',k;end if;
-     end loop;
-   elsif p[3] not in ('products','roles') or cardinality(p)<>4 then raise exception 'Protected business field';end if;
-   if p[3]='products' and p_operation<>'remove' then
-     v:=coalesce(old,'{}')||p_payload;
-     if v->>'price' is null or (v->>'price')::numeric not between 1 and 100000 or length(coalesce(v->>'name','')) not between 1 and 120 then raise exception 'Invalid product';end if;
-   end if;
- elsif b='hospital' then
-   if not public.kp_v8_role(a,'Врач') or p[2] not in ('services','photos','assistantSalary') then raise exception 'Doctor access required';end if;
-   if p[2]='services' and p_operation<>'remove' then
-     v:=coalesce(old,'{}')||p_payload;
-     if v->>'price' is null or (v->>'price')::numeric not between 0 and 10000 or length(coalesce(v->>'name','')) not between 1 and 120 then raise exception 'Invalid service';end if;
-   end if;
- elsif b in ('janitorSubmissions','deputyProposals','atmRequests','bizDeleteRequests') then
-   if cardinality(p)<>2 or p_operation<>'set' or old is not null then raise exception 'Use review service for existing requests';end if;
-   if b='janitorSubmissions' and not public.kp_v8_role(a,'Уборщик') then raise exception 'Janitor access required';end if;
-   if b='deputyProposals' and not public.kp_v8_role(a,'Депутат') then raise exception 'Deputy access required';end if;
-   if b='bizDeleteRequests' and (select document->(p_payload->>'bizId')->>'owner' from public.kp_tree_roots where branch='businesses') is distinct from a then raise exception 'Business owner required';end if;
-   if b='janitorSubmissions' and exists(select 1 from jsonb_each(d)e where e.value->>'worker'=a and e.value->>'date'=to_char(now() at time zone 'Europe/Moscow','YYYY-MM-DD') and e.value->>'status' in ('pending','approved')) then raise exception 'Today already submitted';end if;
-   p_payload:=p_payload||jsonb_build_object('date',to_char(now() at time zone 'Europe/Moscow','YYYY-MM-DD'),'id',p[2],'from',a,'owner',a,'worker',a,'nick',a,'author',a,'status','pending','createdAt',(extract(epoch from now())*1000)::bigint);
- elsif b='bizComplaints' then
-   if cardinality(p)<>3 then raise exception 'Choose one message';end if;
-   if p_operation='set' and old is null then
-     if length(trim(coalesce(p_payload->>'text',''))) not between 5 and 2000 then raise exception 'Message length 5 to 2000';end if;
-     p_payload:=p_payload||jsonb_build_object('id',p[3],'from',a,'createdAt',(extract(epoch from now())*1000)::bigint);
-   elsif p_operation='remove' and (old->>'from'=a or (select document->p[2]->>'owner' from public.kp_tree_roots where branch='businesses')=a) then null;
-   else raise exception 'Message author or business owner required';end if;
- else raise exception 'Unsupported content branch';end if;
- if octet_length(coalesce(p_payload,'null')::text)>3000000 then raise exception 'Content too large';end if;
- if p_operation='remove' then d:=d #- p[2:cardinality(p)];v:=null;
- else
-   v:=coalesce(old,'{}');
-   if p_operation='update' then
-     for k in select jsonb_object_keys(p_payload) loop
-       if p_payload->k='null'::jsonb then v:=v #- string_to_array(k,'/');else v:=public.kp_tree_set_deep(v,string_to_array(k,'/'),p_payload->k);end if;
-     end loop;
-   else v:=p_payload;end if;
-   d:=public.kp_tree_set_deep(d,p[2:cardinality(p)],v);
- end if;
- perform public.kp_v8_put(b,d);return jsonb_build_object('value',v,'committed',true);
-end; $$;
-create or replace function public.kp_business_application_v8(p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();apps jsonb;users jsonb;businesses jsonb;o jsonb;fee bigint:=2500;owner text;count_owned integer;ids jsonb;
-begin
- if a is null or coalesce(p_id,'')!~ '^[A-Za-z0-9_-]{8,100}$' then raise exception 'Invalid application';end if;
- insert into public.kp_tree_roots(branch) values('users'),('businessApps'),('businesses') on conflict do nothing;
- select document into users from public.kp_tree_roots where branch='users' for update;
- select document into apps from public.kp_tree_roots where branch='businessApps' for update;
- select document into businesses from public.kp_tree_roots where branch='businesses' for update;
- o:=apps->p_id;
- if p_action='submit' then
-   if o is not null then if o->>'owner'=a then return o;else raise exception 'Duplicate identifier';end if;end if;
-   if coalesce(users->a->>'accountVerified','false')<>'true' or users->a->>'accountFrozen'='true' then raise exception 'Verified active account required';end if;
-   if exists(select 1 from jsonb_each(apps)e where e.value->>'owner'=a and e.value->>'status'='pending') then raise exception 'An application is already pending';end if;
-   select count(*) into count_owned from jsonb_each(businesses)e where e.value->>'owner'=a and e.value->>'status'='active';
-   if count_owned>=3 then raise exception 'Maximum three active businesses';end if;
-   if length(trim(coalesce(p_data->>'name',''))) not between 2 and 80 or length(trim(coalesce(p_data->>'desc',''))) not between 5 and 2000 or not public.kp_v8_point(p_data->>'lat',p_data->>'lng') then raise exception 'Complete the business application and map point';end if;
-   perform public.kp_v8_money(a,-fee,(md5(p_id||':business-fee'))::uuid,'business_application');
-   o:=jsonb_build_object('id',p_id,'owner',a,'name',trim(p_data->>'name'),'desc',p_data->>'desc','address',left(p_data->>'address',200),'lat',p_data->'lat','lng',p_data->'lng','category',left(p_data->>'category',80),'services',left(p_data->>'services',1000),'status','pending','feePaid',fee,'createdAt',(extract(epoch from now())*1000)::bigint);
- else
-   if a<>'Кайон' or p_action not in ('approve','reject') or o is null then raise exception 'Mayor review required';end if;
-   if o->>'status'<>'pending' then return o;end if;
-   owner:=o->>'owner';
-   if p_action='approve' then
-     businesses:=jsonb_set(businesses,array[p_id],o||jsonb_build_object('status','active','balance',0,'delivery',false,'products','{}'::jsonb,'roles','{}'::jsonb,'employees','{}'::jsonb),true);
-     perform public.kp_v8_put('businesses',businesses);
-     ids:=coalesce(users->owner->'businessIds','[]');if not(ids ? p_id) then ids:=ids||to_jsonb(p_id);end if;
-     select document into users from public.kp_tree_roots where branch='users';
-     users:=jsonb_set(users,array[owner],(users->owner)||jsonb_build_object('businessIds',ids,'businessId',ids->>0));perform public.kp_v8_put('users',users);
-   else perform public.kp_v8_money(owner,coalesce((o->>'feePaid')::bigint,0),(md5(p_id||':business-refund'))::uuid,'business_refund');end if;
-   o:=o||jsonb_build_object('status',case when p_action='approve' then 'approved' else 'rejected' end);
- end if;
- apps:=jsonb_set(apps,array[p_id],o,true);perform public.kp_v8_put('businessApps',apps);return o;
-end; $$;
-revoke all on function public.kp_message_v8(text,text,text,text,jsonb),public.kp_content_v8(text,text,jsonb),public.kp_business_application_v8(text,text,jsonb) from public,anon;
-grant execute on function public.kp_message_v8(text,text,text,text,jsonb),public.kp_content_v8(text,text,jsonb),public.kp_business_application_v8(text,text,jsonb) to authenticated;
+commit;
 
 
 -- ===== 012_hospital_and_business.sql =====
+begin;
+-- Business balances are independent accounts, backed by their own journal.
+-- Pre-existing balances are retained; missing historical entries are not invented.
+create table if not exists public.kp_v8_business_ledger(
+ id text primary key,biz_id text not null,actor text not null,
+ amount bigint not null,balance_after bigint not null,kind text not null,
+ details jsonb not null default '{}'::jsonb,created_at timestamptz not null default now()
+);
+create index if not exists kp_v8_business_ledger_biz_idx on public.kp_v8_business_ledger(biz_id,created_at desc);
+alter table public.kp_v8_business_ledger enable row level security;
+revoke all on public.kp_v8_business_ledger from public,anon,authenticated;
+create or replace function public.kp_business_statement_v8(p_biz text) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();b jsonb;lines jsonb;
+begin
+ select document->p_biz into b from public.kp_tree_roots where branch='businesses';
+ if a is null or b is null or (a<>b->>'owner' and a<>'Кайон') then raise exception 'Business owner required';end if;
+ select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at desc),'[]') into lines from
+   (select id,biz_id,actor,amount,balance_after,kind,details,created_at from public.kp_v8_business_ledger
+    where biz_id=p_biz order by created_at desc limit 100)e;
+ return jsonb_build_object('balance',coalesce((b->>'balance')::bigint,0),'lines',lines);
+end; $$;
 create or replace function public.kp_hospital_view() returns jsonb language plpgsql stable security definer set search_path='' as $$
 declare a text:=public.kp_v8_actor();d jsonb;apps jsonb;assistant_apps jsonb;staff boolean;
 begin
@@ -640,7 +382,7 @@ begin
        if exists(select 1 from jsonb_each(u)e where public.kp_v8_role(e.key,'Помощник врача')) or coalesce((u->target->>'kveScore')::integer,0)<80 then raise exception 'Assistant unavailable';end if;
        jobs:=jobs||jsonb_build_array(jsonb_build_object('id','muni_Помощник врача','type','municipal','role','Помощник врача'));
      else
-       if b->'roles'->role_id is null or b->'employees' ? target or (select count(*) from jsonb_object_keys(coalesce(b->'employees','{}')))>=coalesce((b->>'employeeLimit')::integer,5) then raise exception 'Vacancy unavailable';end if;
+       if b->'roles'->role_id is null or b->'employees' ? target or (select count(*) from jsonb_object_keys(coalesce(b->'employees','{}')))>=3+least(100,coalesce((b->'limitBonus'->>'employees')::integer,(b->'limitBonus'->>'employee')::integer,0)) then raise exception 'Vacancy unavailable';end if;
        b:=public.kp_tree_set_deep(b,array['employees',target],jsonb_build_object('roleId',role_id,'roleName',role_name,'joinedAt',at_ms));
        jobs:=jobs||jsonb_build_array(jsonb_build_object('id','biz_'||(p_data->>'bizId'),'type','business','bizId',p_data->>'bizId','bizName',b->>'name','role',role_name));
      end if;
@@ -665,7 +407,7 @@ begin
  root:=public.kp_tree_set_deep(root,path,app);perform public.kp_v8_put(branch_name,root);return app;
 end; $$;
 create or replace function public.kp_business_order_v8(p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();u jsonb;b jsonb;root jsonb;o jsonb;items jsonb:='[]';entry record;product jsonb;qty integer;total bigint:=0;owner text;at_ms bigint:=(extract(epoch from now())*1000)::bigint;bid text:=p_data->>'bizId';
+declare a text:=public.kp_v8_actor();u jsonb;b jsonb;root jsonb;o jsonb;items jsonb:='[]';entry record;product jsonb;qty integer;total bigint:=0;owner text;at_ms bigint:=(extract(epoch from now())*1000)::bigint;bid text:=p_data->>'bizId';biz_root jsonb;biz_balance bigint;
 begin
  if a is null or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid order';end if;
  select document into u from public.kp_tree_roots where branch='users' for update;
@@ -687,12 +429,19 @@ begin
    perform public.kp_v8_money(a,-total,(md5(p_id||':biz-reserve'))::uuid,'business_order_reserve',jsonb_build_object('bizId',bid));
    o:=jsonb_build_object('id',p_id,'bizId',bid,'bizName',b->>'name','client',a,'clientNick',a,'owner',owner,'items',items,'total',total,'amount',total,'status','paid_waiting_receipt','escrowAmount',total,'clientConfirmed',false,'ownerConfirmed',false,'createdAt',at_ms);
  elsif p_action='confirm' then
-   if o is null or (a is distinct from o->>'client' and a<>owner) then raise exception 'Order participant required';end if;
+   if o is null or (a is distinct from o->>'client' and a<>owner and b->'employees'->a is null) then raise exception 'Order participant or employee required';end if;
    if o->>'status'='completed' then return o;end if;
    if o->>'status'<>'paid_waiting_receipt' then raise exception 'Invalid order state';end if;
-   o:=o||case when a=owner then '{"ownerConfirmed":true}'::jsonb else '{"clientConfirmed":true}'::jsonb end;
+   o:=o||case when a=o->>'client' then '{"clientConfirmed":true}'::jsonb else '{"ownerConfirmed":true}'::jsonb end;
    if o->>'ownerConfirmed'='true' and o->>'clientConfirmed'='true' then
-     perform public.kp_v8_money(owner,(o->>'escrowAmount')::bigint,(md5(p_id||':biz-paid'))::uuid,'business_sale',jsonb_build_object('bizId',bid));
+     -- Both parties confirmed: credit the business account atomically.
+     select document into biz_root from public.kp_tree_roots where branch='businesses' for update;
+     b:=biz_root->bid;biz_balance:=coalesce((b->>'balance')::bigint,0)+(o->>'escrowAmount')::bigint;
+     if biz_balance>1000000000 then raise exception 'Business account limit';end if;
+     b:=b||jsonb_build_object('balance',biz_balance);
+     perform public.kp_v8_put('businesses',jsonb_set(biz_root,array[bid],b));
+     insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+       values('order:'||bid||':'||p_id,bid,a,(o->>'escrowAmount')::bigint,biz_balance,'sale',jsonb_build_object('client',o->>'client','orderId',p_id));
      o:=o||jsonb_build_object('status','completed','escrowAmount',0,'payoutDone',true,'paidAt',at_ms);
    end if;
  elsif p_action='cancel' then
@@ -706,16 +455,371 @@ begin
  return o;
 end; $$;
 revoke all on function public.kp_v8_notify(text,text,text,text) from public,anon,authenticated;
+revoke all on function public.kp_business_statement_v8(text) from public,anon;
+grant execute on function public.kp_business_statement_v8(text) to authenticated;
 revoke all on function public.kp_employment_v8(text,text,jsonb),public.kp_business_order_v8(text,text,jsonb) from public,anon;
 grant execute on function public.kp_employment_v8(text,text,jsonb),public.kp_business_order_v8(text,text,jsonb) to authenticated;
+commit;
+
+
+-- ===== 009_services.sql =====
+-- Install after 010 (uses kp_v8_money). See INSTALL.sql for the correct order.
+begin;
+create or replace function public.kp_v8_distance(a numeric,b numeric,c numeric,d numeric) returns numeric language sql immutable set search_path='' as $$
+ select (6371*2*asin(least(1,sqrt(power(sin(radians((c-a)::double precision)/2),2)+cos(radians(a::double precision))*cos(radians(c::double precision))*power(sin(radians((d-b)::double precision)/2),2)))))::numeric;
+$$;
+-- The displayed taxi fare is quoted by PostgreSQL before the order can be sent.
+create or replace function public.kp_service_quote_v8(p_kind text,p_from_lat numeric,p_from_lng numeric,p_to_lat numeric,p_to_lng numeric)
+returns jsonb language plpgsql stable security definer set search_path='' as $$
+declare dist numeric;tariff integer;
+begin
+ if public.kp_v8_actor() is null then raise exception 'Authentication required';end if;
+ if p_kind not in ('taxi','delivery') or not public.kp_v8_point(p_from_lat::text,p_from_lng::text)
+   or not public.kp_v8_point(p_to_lat::text,p_to_lng::text) then raise exception 'Select two map points';end if;
+ dist:=public.kp_v8_distance(p_from_lat,p_from_lng,p_to_lat,p_to_lng);
+ if dist<=0 or dist>100 then raise exception 'Route must be between 0 and 100 km';end if;
+ tariff:=case when p_kind='taxi' then 250 else 200 end;
+ return jsonb_build_object('distanceKm',dist,'price',greatest(1,round(dist*tariff)::bigint),'pricePerKm',tariff,'method','straight_line_haversine');
+end; $$;
+create or replace function public.kp_service_v8(p_kind text,p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor(); branch_name text; root jsonb; orders jsonb; o jsonb; users jsonb; u jsonb; b jsonb; item jsonb; m jsonb; doctor text; worker text; supplier text; price bigint; product_price bigint:=0; distance numeric; total bigint; at_ms bigint:=(extract(epoch from now())*1000)::bigint; expected text; entry record;biz_root jsonb;biz_balance bigint;
+begin
+ if a is null then raise exception 'Authentication required'; end if;
+ if p_kind not in ('taxi','delivery','hospital') or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid service request'; end if;
+ branch_name:=case p_kind when 'taxi' then 'orders' when 'delivery' then 'deliveryCustomOrders' else 'hospital' end;
+ insert into public.kp_tree_roots(branch) values('users'),(branch_name) on conflict do nothing;
+ select document into users from public.kp_tree_roots where branch='users' for update; u:=users->a;
+ select document into root from public.kp_tree_roots where branch=branch_name for update;
+ orders:=case when p_kind='hospital' then coalesce(root->'appointments','{}') else root end;
+ o:=orders->p_id;
+ if p_action='create' then
+   if o is not null then
+     if coalesce(o->>'client',o->>'clientNick')<>a then raise exception 'Request belongs to another user'; end if;
+     return o;
+   end if;
+   if coalesce(u->>'accountFrozen','false')='true' or coalesce(u->>'accountVerified','false')<>'true' then raise exception 'Verified active account required'; end if;
+   if p_kind='hospital' then
+     item:=root->'services'->(p_data->>'serviceId');
+     select key into doctor from jsonb_each(users) where public.kp_v8_role(key,'Врач') order by key limit 1;
+     if item is null then raise exception 'Hospital service not found';end if;
+     if item->>'active'='false' then raise exception 'Hospital service is disabled';end if;
+     if doctor is null then raise exception 'No doctor is assigned';end if;
+     if doctor=a then raise exception 'Cannot book an appointment with yourself';end if;
+     if p_data->>'date' is null or (p_data->>'date')::date<(now() at time zone 'Europe/Moscow')::date or (p_data->>'date')::date>(now() at time zone 'Europe/Moscow')::date+90 or coalesce(p_data->>'time','')!~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then raise exception 'Invalid appointment time'; end if;
+     if ((p_data->>'date')||' '||(p_data->>'time'))::timestamp <= now() at time zone 'Europe/Moscow' then raise exception 'Choose a future appointment'; end if;
+     if exists(select 1 from jsonb_each(orders) e where e.value->>'doctorNick'=doctor and e.value->>'date'=p_data->>'date' and e.value->>'time'=p_data->>'time' and e.value->>'status' not in ('cancelled','rejected','paid')) then raise exception 'This time is already booked'; end if;
+     price:=coalesce((item->>'price')::bigint,0);
+     if price not between 0 and 10000 then raise exception 'Invalid service price'; end if;
+     o:=jsonb_build_object('id',p_id,'client',a,'clientNick',a,'clientName',coalesce(u->>'displayName',a),'clientSurname','','worker',doctor,'doctorNick',doctor,'serviceId',p_data->>'serviceId','serviceName',item->>'name','price',price,'date',p_data->>'date','time',p_data->>'time','status','pending','paymentStatus','reserved');
+   else
+     if not public.kp_v8_point(p_data->>'destLat',p_data->>'destLng') then raise exception 'Select destination on map'; end if;
+     if p_kind='taxi' then
+       if not public.kp_v8_point(p_data->>'clientLat',p_data->>'clientLng') then raise exception 'Select pickup on map'; end if;
+       if exists(select 1 from jsonb_each(orders) e where e.value->>'client'=a and e.value->>'type'='taxi' and e.value->>'status' not in ('paid','cancelled','completed')) then raise exception 'You already have an active ride'; end if;
+       distance:=public.kp_v8_distance((p_data->>'clientLat')::numeric,(p_data->>'clientLng')::numeric,(p_data->>'destLat')::numeric,(p_data->>'destLng')::numeric);price:=greatest(1,round(distance*250)::bigint);
+       if p_data->>'quotedPrice' is null or (p_data->>'quotedPrice')::bigint<>price then raise exception 'Fare changed: request a new server quote';end if;
+       o:=jsonb_build_object('id',p_id,'client',a,'type','taxi','status','pending','clientLat',p_data->'clientLat','clientLng',p_data->'clientLng','destLat',p_data->'destLat','destLng',p_data->'destLng','price',price,'distanceKm',distance,'info',left(coalesce(p_data->>'info','Поездка по карте'),400));
+       select key into worker from jsonb_each(users) where key<>a and public.kp_v8_role(key,'Водитель') and value->'settings'->>'taxiOnline'='true' and coalesce((value->>'lastSeen')::bigint,0)>at_ms-120000 and not exists(select 1 from jsonb_each(orders) e where e.value->>'worker'=key and e.value->>'status' in ('accepted','driver_arriving','in_progress','waiting_payment')) order by key limit 1;
+       if worker is not null then o:=o||jsonb_build_object('worker',worker,'status','driver_arriving','driverAvatar',users->worker->>'avatar','driverVehicle',users->worker->>'vehicle'); end if;
+     else
+       if p_data->>'source'='business' then
+         select document->(p_data->>'bizId') into b from public.kp_tree_roots where branch='businesses';item:=b->'products'->(p_data->>'productId');
+         if b is null or item is null or b->>'status'<>'active' or coalesce(b->>'delivery','false')<>'true' or item->>'available'='false' or not public.kp_v8_point(b->>'lat',b->>'lng') then raise exception 'Business or product unavailable for delivery'; end if;
+         supplier:=b->>'owner';product_price:=(item->>'price')::bigint;
+         if product_price is null or product_price not between 1 and 100000 then raise exception 'Invalid product price'; end if;
+         o:=jsonb_build_object('source','business','bizId',p_data->>'bizId','productId',p_data->>'productId','from',b->>'name','items',item->>'name','productName',item->>'name','productPrice',product_price,'supplier',supplier,'pickupLat',b->'lat','pickupLng',b->'lng');
+       elsif p_data->>'source'='marketplace' then
+         select document->(p_data->>'listingId') into m from public.kp_tree_roots where branch='marketplace' for update;
+         if m is null or not public.kp_v8_point(m->>'sellerLat',m->>'sellerLng') then raise exception 'Listing has no pickup point'; end if;
+         if m->>'category' in ('service','work') then raise exception 'Only physical goods can be delivered'; end if;
+         if exists(select 1 from jsonb_each(orders) e where e.value->>'listingId'=p_data->>'listingId' and e.value->>'status'<>'cancelled') then raise exception 'Delivery already exists for this purchase'; end if;
+         -- The market purchase is confirmed and paid separately.
+         if m->>'status'<>'sold' or m->>'buyer' is distinct from a then raise exception 'Purchase and pay for the listing before delivery'; end if;
+         o:=jsonb_build_object('source','marketplace','listingId',p_data->>'listingId','from',m->>'seller','items',m->>'title','listingTitle',m->>'title','pickupLat',m->'sellerLat','pickupLng',m->'sellerLng');
+       else raise exception 'Select delivery source'; end if;
+       if supplier=a then raise exception 'Cannot purchase your own product'; end if;
+       distance:=public.kp_v8_distance((o->>'pickupLat')::numeric,(o->>'pickupLng')::numeric,(p_data->>'destLat')::numeric,(p_data->>'destLng')::numeric);price:=greatest(1,round(distance*200)::bigint);
+       o:=o||jsonb_build_object('id',p_id,'client',a,'status','waiting','deliveryLat',p_data->'destLat','deliveryLng',p_data->'destLng','deliveryPrice',price,'priceOffer',price,'price',price,'distanceKm',distance,'address',left(coalesce(p_data->>'address','Точка на карте'),200),'notes',left(coalesce(p_data->>'notes',''),1000),'contact',left(coalesce(p_data->>'contact',''),100));
+     end if;
+     if distance<=0 or distance>100 then raise exception 'Route must be between 0 and 100 km'; end if;
+   end if;
+   total:=price+product_price;
+   if total>0 then perform public.kp_v8_money(a,-total,(md5(p_kind||p_id||':reserve'))::uuid,'service_reserve',jsonb_build_object('service',p_kind,'order',p_id));end if;
+   o:=o||jsonb_build_object('escrowAmount',total,'createdAt',at_ms,'updatedAt',at_ms,'clientConfirmed',false,'workerConfirmed',false);
+ else
+   if o is null then raise exception 'Order missing'; end if;
+   worker:=o->>'worker';price:=(o->>'price')::bigint;
+   if p_action='take' then
+     if coalesce(o->>'client',o->>'clientNick')=a or not public.kp_v8_role(a,case when p_kind='taxi' then 'Водитель' else 'Доставщик' end) then raise exception 'Worker access required'; end if;
+     if o->>'worker'=a then return o; end if;
+     if o->>'status' not in ('pending','waiting') or worker is not null then raise exception 'Order already assigned'; end if;
+     if exists(select 1 from jsonb_each(orders) e where e.value->>'worker'=a and e.value->>'status' in ('driver_arriving','accepted','client_confirmed','in_progress','waiting_payment','delivered')) then raise exception 'Finish your active order first'; end if;
+     o:=o||jsonb_build_object('worker',a,'status',case when p_kind='taxi' then 'driver_arriving' else 'client_confirmed' end,'driverAvatar',u->>'avatar','driverVehicle',u->>'vehicle','acceptedAt',at_ms);
+   elsif p_action='release' then
+     if p_kind='hospital' or a is distinct from worker or o->>'status' not in ('accepted','driver_arriving','client_confirmed') then raise exception 'Cannot release active service';end if;
+     o:=o||jsonb_build_object('worker',null,'status',case when p_kind='taxi' then 'pending' else 'waiting' end,'driverLat',null,'driverLng',null,'driverAvatar',null,'driverVehicle',null,'releasedAt',at_ms);
+   elsif p_action='cancel' then
+     if a is distinct from o->>'client' and a is distinct from worker and a<>'Кайон' and not(p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Not an order participant'; end if;
+     if o->>'status' in ('cancelled','rejected') then return o; end if;
+     if o->>'status' not in ('pending','waiting','accepted','driver_arriving','client_confirmed') then raise exception 'Cannot cancel after service has started'; end if;
+     total:=coalesce((o->>'escrowAmount')::bigint,0);
+     if total>0 then perform public.kp_v8_money(o->>'client',total,(md5(p_kind||p_id||':refund'))::uuid,'service_refund',jsonb_build_object('order',p_id));end if;
+     o:=o||jsonb_build_object('status','cancelled','escrowAmount',0,'paymentStatus','refunded');
+   elsif p_action='location' then
+     if a is distinct from worker or p_kind='hospital' or o->>'status' not in ('driver_arriving','accepted','client_confirmed','in_progress') or not public.kp_v8_point(p_data->>'lat',p_data->>'lng') then raise exception 'Location update unavailable'; end if;
+     o:=o||jsonb_build_object('driverLat',p_data->'lat','driverLng',p_data->'lng','driverLocationUpdatedAt',at_ms);
+   elsif p_action='start' then
+     if a is distinct from worker and not (p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Assigned worker required'; end if;
+     expected:=case when p_kind='hospital' then 'accepted' else 'in_progress' end;
+     if o->>'status'=expected then return o; end if;
+     if not((o->>'status') = any(case when p_kind='hospital' then array['pending'] when p_kind='taxi' then array['pending','driver_arriving','accepted'] else array['waiting','client_confirmed'] end)) then raise exception 'Invalid order transition'; end if;
+     o:=o||jsonb_build_object('status',expected);
+   elsif p_action='finish' then
+     if a is distinct from worker and not (p_kind='hospital' and public.kp_v8_role(a,'Помощник врача')) then raise exception 'Assigned worker required'; end if;
+     expected:=case p_kind when 'hospital' then 'awaiting_confirmation' when 'taxi' then 'waiting_payment' else 'delivered' end;
+     if o->>'status'=expected then return o; end if;
+     if o->>'status'<>(case when p_kind='hospital' then 'accepted' else 'in_progress' end) then raise exception 'Service has not started'; end if;
+     o:=o||jsonb_build_object('status',expected,'workerConfirmed',true,'doctorConfirmed',true);
+   elsif p_action='confirm' then
+     if a is distinct from o->>'client' then raise exception 'Client confirmation required'; end if;
+     if o->>'status' in ('paid','done') then return o; end if;
+     if o->>'status' not in ('waiting_payment','awaiting_confirmation','delivered') or worker is null then raise exception 'Worker must finish first'; end if;
+     total:=coalesce((o->>'escrowAmount')::bigint,0);product_price:=coalesce((o->>'productPrice')::bigint,0);
+     if total<>price+product_price then raise exception 'Escrow mismatch'; end if;
+     if price>0 then perform public.kp_v8_money(worker,price,(md5(p_kind||p_id||':worker'))::uuid,'service_payout',jsonb_build_object('order',p_id));end if;
+     if product_price>0 and p_kind='delivery' and o->>'source'='business' then
+       select document into biz_root from public.kp_tree_roots where branch='businesses' for update;
+       b:=biz_root->(o->>'bizId');
+       if b is null then raise exception 'Business account missing';end if;
+       biz_balance:=coalesce((b->>'balance')::bigint,0)+product_price;
+       if biz_balance>1000000000 then raise exception 'Business account limit';end if;
+       b:=b||jsonb_build_object('balance',biz_balance);
+       perform public.kp_v8_put('businesses',jsonb_set(biz_root,array[o->>'bizId'],b));
+       insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+         values('delivery:'||p_id,o->>'bizId',a,product_price,biz_balance,'sale',jsonb_build_object('orderId',p_id,'client',o->>'client'));
+     elsif product_price>0 then
+       perform public.kp_v8_money(o->>'supplier',product_price,(md5(p_kind||p_id||':product'))::uuid,'business_sale',jsonb_build_object('order',p_id));
+     end if;
+     o:=o||jsonb_build_object('status',case when p_kind='delivery' then 'done' else 'paid' end,'clientConfirmed',true,'clientReceived',true,'paymentStatus','paid','payoutDone',true,'escrowAmount',0,'paidAt',at_ms);
+   else raise exception 'Unknown service action'; end if;
+   o:=o||jsonb_build_object('updatedAt',at_ms);
+ end if;
+ orders:=jsonb_set(orders,array[p_id],o,true);
+ if p_kind='hospital' then root:=jsonb_set(root,'{appointments}',orders,true);else root:=orders;end if;
+ perform public.kp_v8_put(branch_name,root);
+ if p_action<>'location' then
+   perform public.kp_v8_notify(o->>'client',case p_kind when 'taxi' then 'Такси' when 'delivery' then 'Доставка' else 'Больница' end||': '||case p_action when 'create' then 'заказ создан, оплата зарезервирована' when 'cancel' then 'заказ отменён, оплата возвращена' when 'take' then 'исполнитель назначен' when 'start' then 'выполнение началось' when 'finish' then 'подтвердите получение услуги' when 'release' then 'водитель отказался, ищем следующего' else 'оплата завершена' end,'system',p_kind||'_'||p_id||'_'||p_action);
+   if p_action in ('create','take') and o->>'worker' is not null then perform public.kp_v8_notify(o->>'worker','Новый заказ: '||case p_kind when 'taxi' then 'такси' when 'delivery' then 'доставка' else 'приём в больнице' end,'system',p_kind||'_'||p_id||'assigned');end if;
+ end if;
+ return o;
+end; $$;
+revoke all on function public.kp_v8_distance(numeric,numeric,numeric,numeric) from public,anon,authenticated;
+revoke all on function public.kp_service_quote_v8(text,numeric,numeric,numeric,numeric) from public,anon;
+grant execute on function public.kp_service_quote_v8(text,numeric,numeric,numeric,numeric) to authenticated;
+revoke all on function public.kp_service_v8(text,text,text,jsonb) from public,anon;
+grant execute on function public.kp_service_v8(text,text,text,jsonb) to authenticated;
+commit;
+
+
+-- ===== 011_messages_and_management.sql =====
+begin;
+create or replace function public.kp_message_v8(p_action text,p_kind text,p_peer text default null,p_id text default null,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor(); b text; conv text; path text[]; root jsonb; msg jsonb; users jsonb; attachment jsonb; reply jsonb; emoji text; target jsonb; idx jsonb; at_ms bigint:=(extract(epoch from now())*1000)::bigint;
+begin
+ if a is null or p_kind not in ('chat','dm') or coalesce(p_id,'')!~ '^[A-Za-z0-9_-]{8,100}$' then raise exception 'Invalid message request'; end if;
+ if p_kind='dm' then
+   if p_peer is null or not exists(select 1 from public.kp_profiles where nickname=p_peer) then raise exception 'Recipient missing'; end if;
+   conv:=case when a collate "C" < p_peer collate "C" then a||'__dm__'||p_peer else p_peer||'__dm__'||a end;
+   b:='dms';path:=array[conv,'messages',p_id];
+ else b:='chat';path:=array[p_id];end if;
+ select document into users from public.kp_tree_roots where branch='users';
+ insert into public.kp_tree_roots(branch) values(b) on conflict do nothing;
+ select document into root from public.kp_tree_roots where branch=b for update;
+ msg:=root #> path;
+ if p_action='send' then
+   if msg is not null then
+     if msg->>'nick'<>a then raise exception 'Message identifier collision'; end if;
+     return msg;
+   end if;
+   if length(coalesce(p_data->>'text',''))>4000 or jsonb_typeof(coalesce(p_data->'attachments','[]'))<>'array' or jsonb_array_length(coalesce(p_data->'attachments','[]'))>6 then raise exception 'Message limit exceeded'; end if;
+   for attachment in select value from jsonb_array_elements(coalesce(p_data->'attachments','[]')) loop
+     if attachment->>'type' is null or attachment->>'type' not in ('image','video','voice','video_circle','sticker') or coalesce(attachment->>'url','')!~ '^https://' or length(attachment->>'url')>2000 then raise exception 'Invalid attachment'; end if;
+   end loop;
+   msg:=jsonb_build_object('nick',a,'avatar',users->a->>'avatar','text',left(coalesce(p_data->>'text',''),4000),'attachments',coalesce(p_data->'attachments','[]'),'createdAt',at_ms,'time',to_char(now() at time zone 'Europe/Moscow','HH24:MI'));
+   if p_data ? 'replyId' then
+     reply:=root #> (case when p_kind='chat' then array[p_data->>'replyId'] else array[conv,'messages',p_data->>'replyId'] end);
+     if reply is not null then msg:=msg||jsonb_build_object('reply',jsonb_build_object('id',p_data->>'replyId','nick',reply->>'nick','text',left(coalesce(reply->>'text','Вложение'),180)));end if;
+   end if;
+   if p_data ? 'forward' then
+     target:=public.kp_tree_access('read',p_data->'forward'->>'path');reply:=target->'value';
+     if (p_data->'forward'->>'path') !~ '^(chat/[^/]+|dms/[^/]+/messages/[^/]+)$' or reply is null or reply->>'nick' is null then raise exception 'Forwarded message unavailable'; end if;
+     msg:=msg||jsonb_build_object('text',reply->>'text','attachments',coalesce(reply->'attachments',case when reply->>'mediaData' is not null then jsonb_build_array(jsonb_build_object('url',reply->>'mediaData','type',reply->>'msgType')) else '[]'::jsonb end),'forwardedFrom',reply->>'nick');
+   end if;
+   if coalesce(msg->>'text','')='' and jsonb_array_length(msg->'attachments')=0 then raise exception 'Empty message'; end if;
+ elsif p_action='reaction' then
+   if msg is null then raise exception 'Message missing'; end if;
+   emoji:=p_data->>'emoji';if emoji not in ('👍','❤️','😂','🔥','😮','😢') then raise exception 'Unsupported reaction'; end if;
+   target:=coalesce(msg->'reactions','{}');
+   if target->>a=emoji then target:=target-a;else target:=jsonb_set(target,array[a],to_jsonb(emoji),true);end if;
+   msg:=msg||jsonb_build_object('reactions',target);
+ elsif p_action='edit' then
+   if msg is null or msg->>'nick'<>a then raise exception 'Only author can edit'; end if;
+   if length(trim(coalesce(p_data->>'text',''))) not between 1 and 4000 then raise exception 'Invalid message text';end if;
+   msg:=msg||jsonb_build_object('text',trim(p_data->>'text'),'caption',trim(p_data->>'text'),'edited',true);
+ elsif p_action='delete' then
+   if msg is null then return jsonb_build_object('ok',true);end if;
+   if msg->>'nick'<>a then raise exception 'Only author can delete'; end if;
+   root:=root #- path;perform public.kp_v8_put(b,root);return jsonb_build_object('ok',true);
+ else raise exception 'Unknown message action';end if;
+ root:=public.kp_tree_set_deep(root,path,msg);perform public.kp_v8_put(b,root);
+ if p_kind='dm' and p_action='send' then
+   insert into public.kp_tree_roots(branch) values('dmIndex') on conflict do nothing;
+   select document into idx from public.kp_tree_roots where branch='dmIndex' for update;
+   target:=jsonb_build_object('lastTs',at_ms,'latest',msg);
+   idx:=public.kp_tree_set_deep(idx,array[a,p_peer],target||'{"unread":false}');
+   idx:=public.kp_tree_set_deep(idx,array[p_peer,a],target||'{"unread":true}');
+   perform public.kp_v8_put('dmIndex',idx);
+ end if;
+ return msg;
+end; $$;
+
+-- Restricted editors for existing business, racing and hospital interfaces.
+create or replace function public.kp_content_v8(p_operation text,p_path text,p_payload jsonb default null) returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor(); p text[]:=string_to_array(p_path,'/');b text;d jsonb;old jsonb;v jsonb;k text;u jsonb;entity jsonb;product record;max_price bigint;max_count integer;
+begin
+ if a is null then raise exception 'Authentication required';end if;
+ b:=p[1];if p_operation not in ('set','update','remove') then raise exception 'Invalid operation';end if;
+ select document->a into u from public.kp_tree_roots where branch='users' for update;
+ insert into public.kp_tree_roots(branch) values(b) on conflict do nothing;
+ select document into d from public.kp_tree_roots where branch=b for update;
+ old:=d #> p[2:cardinality(p)];
+ if b in ('races','raceDayGroups','rentBuildings') then
+   if a<>'Кайон' or cardinality(p)<2 then raise exception 'Mayor access required';end if;
+   if b='rentBuildings' and cardinality(p)<>2 then raise exception 'Choose a building';end if;
+   if b='rentBuildings' and p_operation='update' then
+     for k in select jsonb_object_keys(p_payload) loop
+       if k not in ('name','weekPrice','photo') then raise exception 'Rental status is managed by the server';end if;
+     end loop;
+   end if;
+ elsif b='businesses' then
+   if d->p[2]->>'owner' is distinct from a or cardinality(p)<2 then raise exception 'Business owner required';end if;
+   if cardinality(p)=2 then
+     if p_operation<>'update' then raise exception 'Only business details may be updated';end if;
+     for k in select jsonb_object_keys(p_payload) loop
+       if k ~ '^(products|roles)/[A-Za-z0-9_-]+$' then
+         v:=p_payload->k;
+         if k like 'products/%' and v<>'null'::jsonb and (v->>'price' is null or (v->>'price')::numeric not between 1 and 100000 or length(coalesce(v->>'name','')) not between 1 and 120) then raise exception 'Invalid product';end if;
+         continue;
+       end if;
+       if k not in ('name','desc','address','lat','lng','category','services','icon','banner','delivery','bgEffect','description') then raise exception 'Protected business field: %',k;end if;
+       if k='bgEffect' and p_payload->k not in ('null'::jsonb,'""'::jsonb) then raise exception 'Purchase business decoration via finance service';end if;
+     end loop;
+   elsif p[3] not in ('products','roles') or cardinality(p)<>4 then raise exception 'Protected business field';end if;
+   if p[3]='roles' and p_operation='remove' and exists(
+      select 1 from jsonb_each(coalesce(d->p[2]->'employees','{}'))e where e.value->>'roleId'=p[4]
+   ) then raise exception 'Dismiss or move employees before deleting their role';end if;
+   if p[3]='products' and p_operation<>'remove' then
+     v:=coalesce(old,'{}')||p_payload;
+     if v->>'price' is null or (v->>'price')::numeric not between 1 and 100000 or length(coalesce(v->>'name','')) not between 1 and 120 then raise exception 'Invalid product';end if;
+   end if;
+ elsif b='hospital' then
+   if not public.kp_v8_role(a,'Врач') or p[2] not in ('services','photos','assistantSalary') then raise exception 'Doctor access required';end if;
+   if p[2]='services' and p_operation<>'remove' then
+     v:=coalesce(old,'{}')||p_payload;
+     if v->>'price' is null or (v->>'price')::numeric not between 0 and 10000 or length(coalesce(v->>'name','')) not between 1 and 120 then raise exception 'Invalid service';end if;
+   end if;
+ elsif b in ('janitorSubmissions','deputyProposals','atmRequests','bizDeleteRequests') then
+   if cardinality(p)<>2 or p_operation<>'set' or old is not null then raise exception 'Use review service for existing requests';end if;
+   if b='janitorSubmissions' and not public.kp_v8_role(a,'Уборщик') then raise exception 'Janitor access required';end if;
+   if b='deputyProposals' and not public.kp_v8_role(a,'Депутат') then raise exception 'Deputy access required';end if;
+   if b='bizDeleteRequests' and (select document->(p_payload->>'bizId')->>'owner' from public.kp_tree_roots where branch='businesses') is distinct from a then raise exception 'Business owner required';end if;
+   if b='janitorSubmissions' and exists(select 1 from jsonb_each(d)e where e.value->>'worker'=a and e.value->>'date'=to_char(now() at time zone 'Europe/Moscow','YYYY-MM-DD') and e.value->>'status' in ('pending','approved')) then raise exception 'Today already submitted';end if;
+   p_payload:=p_payload||jsonb_build_object('date',to_char(now() at time zone 'Europe/Moscow','YYYY-MM-DD'),'id',p[2],'from',a,'owner',a,'worker',a,'nick',a,'author',a,'status','pending','createdAt',(extract(epoch from now())*1000)::bigint);
+ elsif b='bizComplaints' then
+   if cardinality(p)<>3 then raise exception 'Choose one message';end if;
+   if p_operation='set' and old is null then
+     if length(trim(coalesce(p_payload->>'text',''))) not between 5 and 2000 then raise exception 'Message length 5 to 2000';end if;
+     p_payload:=p_payload||jsonb_build_object('id',p[3],'from',a,'createdAt',(extract(epoch from now())*1000)::bigint);
+   elsif p_operation='remove' and (old->>'from'=a or (select document->p[2]->>'owner' from public.kp_tree_roots where branch='businesses')=a) then null;
+   else raise exception 'Message author or business owner required';end if;
+ else raise exception 'Unsupported content branch';end if;
+ if octet_length(coalesce(p_payload,'null')::text)>3000000 then raise exception 'Content too large';end if;
+ if p_operation='remove' then d:=d #- p[2:cardinality(p)];v:=null;
+ else
+   v:=coalesce(old,'{}');
+   if p_operation='update' then
+     for k in select jsonb_object_keys(p_payload) loop
+       if p_payload->k='null'::jsonb then v:=v #- string_to_array(k,'/');else v:=public.kp_tree_set_deep(v,string_to_array(k,'/'),p_payload->k);end if;
+     end loop;
+   else v:=p_payload;end if;
+   d:=public.kp_tree_set_deep(d,p[2:cardinality(p)],v);
+ end if;
+ if b='rentBuildings' and p_operation<>'remove' then
+   entity:=d->p[2];
+   if length(trim(coalesce(entity->>'name',''))) not between 2 and 80 or
+      coalesce(entity->>'weekPrice','') !~ '^[0-9]{1,6}$' or
+      (entity->>'weekPrice')::bigint not between 1 and 100000 or
+      length(coalesce(entity->>'photo',''))>2500000 then raise exception 'Invalid rental advertisement';end if;
+ elsif b='businesses' and p_operation<>'remove' then
+   entity:=d->p[2];
+   max_count:=3+least(100,coalesce((entity->'limitBonus'->>'products')::integer,(entity->'limitBonus'->>'product')::integer,0));
+   max_price:=1000+500*coalesce((entity->'limitBonus'->>'priceCap')::integer,0);
+   if (select count(*) from jsonb_object_keys(coalesce(entity->'products','{}'))) >max_count then raise exception 'Product limit exceeded';end if;
+   for product in select key,value from jsonb_each(coalesce(entity->'products','{}')) loop
+     if length(trim(coalesce(product.value->>'name',''))) not between 1 and 120 or
+       coalesce(product.value->>'price','') !~ '^[0-9]{1,8}$' or
+       (product.value->>'price')::bigint not between 1 and max_price then raise exception 'Product price or name outside permitted limits';end if;
+   end loop;
+   if not public.kp_v8_point(entity->>'lat',entity->>'lng') then raise exception 'Business needs a map location';end if;
+   if length(coalesce(entity->>'name','')) not between 2 and 80 then raise exception 'Business name length exceeded';end if;
+ end if;
+ perform public.kp_v8_put(b,d);return jsonb_build_object('value',v,'committed',true);
+end; $$;
+create or replace function public.kp_business_application_v8(p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();apps jsonb;users jsonb;businesses jsonb;o jsonb;fee bigint:=2500;owner text;count_owned integer;ids jsonb;
+begin
+ if a is null or coalesce(p_id,'')!~ '^[A-Za-z0-9_-]{8,100}$' then raise exception 'Invalid application';end if;
+ insert into public.kp_tree_roots(branch) values('users'),('businessApps'),('businesses') on conflict do nothing;
+ select document into users from public.kp_tree_roots where branch='users' for update;
+ select document into apps from public.kp_tree_roots where branch='businessApps' for update;
+ select document into businesses from public.kp_tree_roots where branch='businesses' for update;
+ o:=apps->p_id;
+ if p_action='submit' then
+   if o is not null then if o->>'owner'=a then return o;else raise exception 'Duplicate identifier';end if;end if;
+   if coalesce(users->a->>'accountVerified','false')<>'true' or users->a->>'accountFrozen'='true' then raise exception 'Verified active account required';end if;
+   if exists(select 1 from jsonb_each(apps)e where e.value->>'owner'=a and e.value->>'status'='pending') then raise exception 'An application is already pending';end if;
+   select count(*) into count_owned from jsonb_each(businesses)e where e.value->>'owner'=a and e.value->>'status'='active';
+   if count_owned>=3 then raise exception 'Maximum three active businesses';end if;
+   if length(trim(coalesce(p_data->>'name',''))) not between 2 and 80 or length(trim(coalesce(p_data->>'desc',''))) not between 5 and 2000 or not public.kp_v8_point(p_data->>'lat',p_data->>'lng') then raise exception 'Complete the business application and map point';end if;
+   perform public.kp_v8_money(a,-fee,(md5(p_id||':business-fee'))::uuid,'business_application');
+   o:=jsonb_build_object('id',p_id,'owner',a,'name',trim(p_data->>'name'),'desc',p_data->>'desc','address',left(p_data->>'address',200),'lat',p_data->'lat','lng',p_data->'lng','category',left(p_data->>'category',80),'services',left(p_data->>'services',1000),'status','pending','feePaid',fee,'createdAt',(extract(epoch from now())*1000)::bigint);
+ else
+   if a<>'Кайон' or p_action not in ('approve','reject') or o is null then raise exception 'Mayor review required';end if;
+   if o->>'status'<>'pending' then return o;end if;
+   owner:=o->>'owner';
+   if p_action='approve' then
+     businesses:=jsonb_set(businesses,array[p_id],o||jsonb_build_object('status','active','balance',0,'delivery',false,'products','{}'::jsonb,'roles','{}'::jsonb,'employees','{}'::jsonb),true);
+     perform public.kp_v8_put('businesses',businesses);
+     ids:=coalesce(users->owner->'businessIds','[]');if not(ids ? p_id) then ids:=ids||to_jsonb(p_id);end if;
+     select document into users from public.kp_tree_roots where branch='users';
+     users:=jsonb_set(users,array[owner],(users->owner)||jsonb_build_object('businessIds',ids,'businessId',ids->>0));perform public.kp_v8_put('users',users);
+   else perform public.kp_v8_money(owner,coalesce((o->>'feePaid')::bigint,0),(md5(p_id||':business-refund'))::uuid,'business_refund');end if;
+   o:=o||jsonb_build_object('status',case when p_action='approve' then 'approved' else 'rejected' end);
+ end if;
+ apps:=jsonb_set(apps,array[p_id],o,true);perform public.kp_v8_put('businessApps',apps);return o;
+end; $$;
+revoke all on function public.kp_message_v8(text,text,text,text,jsonb),public.kp_content_v8(text,text,jsonb),public.kp_business_application_v8(text,text,jsonb) from public,anon;
+grant execute on function public.kp_message_v8(text,text,text,text,jsonb),public.kp_content_v8(text,text,jsonb),public.kp_business_application_v8(text,text,jsonb) to authenticated;
+commit;
 
 
 -- ===== 013_civic_and_finance.sql =====
+begin;
 create table if not exists public.kp_v8_finance_ops(id uuid primary key,actor text not null,args jsonb not null,result jsonb not null,created_at timestamptz default now());
 alter table public.kp_v8_finance_ops enable row level security;
 revoke all on public.kp_v8_finance_ops from anon,authenticated;
 create or replace function public.kp_business_finance_v8(p_action text,p_id uuid,p_biz text default null,p_amount bigint default 0,p_target text default null) returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();d jsonb;u jsonb;b jsonb;bal bigint;args jsonb;result jsonb;old public.kp_v8_finance_ops%rowtype;receiver text;
+declare a text:=public.kp_v8_actor();d jsonb;u jsonb;b jsonb;bal bigint;args jsonb;result jsonb;old public.kp_v8_finance_ops%rowtype;receiver text;unit_price bigint;qty integer;bonus jsonb;effect_name text;
 begin
  if a is null or p_id is null or p_amount is null or p_amount not between 1 and 100000 then raise exception 'Amount must be 1 to 100000';end if;
  select document into u from public.kp_tree_roots where branch='users' for update;
@@ -738,13 +842,67 @@ begin
      receiver:=case when p_action='withdraw' then a else p_target end;
      if p_action='salary' and (p_target is null or b->'employees'->p_target is null) then raise exception 'Employee required';end if;
      perform public.kp_v8_money(receiver,p_amount,p_id,'business_'||p_action,jsonb_build_object('bizId',p_biz));bal:=bal-p_amount;
+   elsif p_action='upgrade' then
+     receiver:=split_part(coalesce(p_target,''),':',1);
+     qty:=nullif(split_part(coalesce(p_target,''),':',2),'')::integer;
+     unit_price:=case receiver when 'employee' then 350 when 'product' then 250 when 'priceCap' then 400 else null end;
+     if qty is null or qty not between 1 and 20 or unit_price is null or p_amount<>unit_price*qty or bal<p_amount then raise exception 'Invalid upgrade cost or business funds';end if;
+     bonus:=coalesce(b->'limitBonus','{}'::jsonb);
+     receiver:=case receiver when 'employee' then 'employees' when 'product' then 'products' else 'priceCap' end;
+     bonus:=jsonb_set(bonus,array[receiver],to_jsonb(least(100,coalesce((bonus->>receiver)::integer,0)+qty)),true);
+     b:=b||jsonb_build_object('limitBonus',bonus);bal:=bal-p_amount;
+   elsif p_action='effect' then
+     effect_name:=coalesce(p_target,'');
+     unit_price:=case effect_name when 'shimmer' then 199 when 'particles' then 249 when 'aurora' then 399 when 'fire' then 449 when 'plasma' then 499 when 'galaxy' then 549 when 'thunder' then 699 when 'hologram' then 749 when 'dragon' then 849 when 'prime' then 899 else null end;
+     if unit_price is null or unit_price<>p_amount or effect_name=coalesce(b->>'bgEffect','') or bal<p_amount then raise exception 'Invalid effect purchase';end if;
+     b:=b||jsonb_build_object('bgEffect',effect_name);bal:=bal-p_amount;
    else raise exception 'Unknown business operation';end if;
    b:=b||jsonb_build_object('balance',bal);perform public.kp_v8_put('businesses',jsonb_set(d,array[p_biz],b));
+   insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+     values('finance:'||p_id::text,p_biz,a,case when p_action='deposit' then p_amount else -p_amount end,bal,p_action,jsonb_build_object('target',p_target));
  end if;
  result:=jsonb_build_object('ok',true,'balance',bal);
  insert into public.kp_v8_finance_ops(id,actor,args,result)values(p_id,a,args,result);
- if p_target is not null then perform public.kp_v8_notify(p_target,'Получена зарплата: '||p_amount||' ₽','money','salary_'||p_id::text);end if;
+ if p_action in ('salary','assistant_salary') and p_target is not null then perform public.kp_v8_notify(p_target,'Получена зарплата: '||p_amount||' ₽','money','salary_'||p_id::text);end if;
  return result;
+end; $$;
+
+-- No cron is assumed: the owner explicitly triggers due automatic salaries
+-- when visiting the business panel. Payout and journal update in one transaction.
+create or replace function public.kp_business_payroll_v8(p_biz text) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();d jsonb;b jsonb;employees jsonb;emp record;role jsonb;
+ amount bigint;bal bigint;last_paid bigint;due_ms bigint;now_ms bigint:=(extract(epoch from now())*1000)::bigint;
+ op uuid;count_paid integer:=0;
+begin
+ perform 1 from public.kp_tree_roots where branch='users' for update;
+ select document into d from public.kp_tree_roots where branch='businesses' for update;
+ b:=d->p_biz;
+ if a is null or b is null or b->>'owner' is distinct from a or b->>'status'<>'active' then raise exception 'Business owner required';end if;
+ employees:=coalesce(b->'employees','{}');bal:=coalesce((b->>'balance')::bigint,0);
+ for emp in select key,value from jsonb_each(employees) loop
+   role:=b->'roles'->(emp.value->>'roleId');
+   if role is null or coalesce(role->>'salaryMode',role->>'salaryType','manual') not in ('auto','automatic','авто') then continue;end if;
+   if coalesce(role->>'salaryAmount','') !~ '^[0-9]{1,6}$' then continue;end if;
+   amount:=(role->>'salaryAmount')::bigint;
+   if amount<1 or amount>100000 then continue;end if;
+   due_ms:=case when role->>'salaryPeriod' in ('week','weekly','неделю') then 604800000 else 86400000 end;
+   last_paid:=coalesce((emp.value->>'salaryPaidAt')::bigint,(emp.value->>'joinedAt')::bigint,now_ms);
+   if now_ms-last_paid<due_ms or bal<amount then continue;end if;
+   op:=(md5('payroll:'||p_biz||':'||emp.key||':'||last_paid))::uuid;
+   perform public.kp_v8_money(emp.key,amount,op,'business_auto_salary',jsonb_build_object('bizId',p_biz,'role',role->>'name'));
+   bal:=bal-amount;
+   employees:=public.kp_tree_set_deep(employees,array[emp.key,'salaryPaidAt'],to_jsonb(now_ms));
+   insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+     values('auto:'||op::text,p_biz,a,-amount,bal,'auto_salary',jsonb_build_object('employee',emp.key,'role',role->>'name'));
+   perform public.kp_v8_notify(emp.key,'Автозарплата из «'||coalesce(b->>'name','Бизнес')||'»: '||amount||' ₽','money','payroll_'||op::text);
+   count_paid:=count_paid+1;
+ end loop;
+ if count_paid>0 then
+   b:=b||jsonb_build_object('employees',employees,'balance',bal);
+   perform public.kp_v8_put('businesses',jsonb_set(d,array[p_biz],b));
+ end if;
+ return jsonb_build_object('paid',count_paid,'balance',bal);
 end; $$;
 
 -- All civic requests have one durable, reviewable record. Protected rewards
@@ -818,3 +976,284 @@ begin
 end; $$;
 revoke all on function public.kp_business_finance_v8(text,uuid,text,bigint,text),public.kp_civic_v8(text,text,text,jsonb) from public,anon;
 grant execute on function public.kp_business_finance_v8(text,uuid,text,bigint,text),public.kp_civic_v8(text,text,text,jsonb) to authenticated;
+revoke all on function public.kp_business_payroll_v8(text) from public,anon;
+grant execute on function public.kp_business_payroll_v8(text) to authenticated;
+commit;
+
+
+-- ===== 014_rentals_and_access.sql =====
+-- Additional protected rental operations. Requires migrations 001-013.
+begin;
+create table if not exists public.kp_v8_rental_ops(
+ id uuid primary key,actor text not null,building_id text not null,
+ action text not null,result jsonb not null,created_at timestamptz not null default now()
+);
+alter table public.kp_v8_rental_ops enable row level security;
+revoke all on public.kp_v8_rental_ops from public,anon,authenticated;
+
+create or replace function public.kp_rental_v8(p_action text,p_id uuid,p_building text)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();users jsonb;u jsonb;buildings jsonb;b jsonb;
+ old public.kp_v8_rental_ops%rowtype;price bigint;discount numeric:=0;
+ now_ms bigint:=(extract(epoch from now())*1000)::bigint;result jsonb;previous text;
+begin
+ if a is null or p_id is null or coalesce(p_building,'') !~ '^[A-Za-z0-9_-]{8,100}$'
+    or p_action not in ('rent','revoke') then raise exception 'Invalid rental request';end if;
+ select document into users from public.kp_tree_roots where branch='users' for update;
+ u:=users->a;
+ select * into old from public.kp_v8_rental_ops where id=p_id;
+ if found then
+   if old.actor<>a or old.action<>p_action or old.building_id<>p_building then raise exception 'Rental request mismatch';end if;
+   return old.result;
+ end if;
+ select document into buildings from public.kp_tree_roots where branch='rentBuildings' for update;
+ b:=buildings->p_building;
+ if b is null then raise exception 'Building missing';end if;
+ if p_action='rent' then
+   if coalesce(u->>'accountVerified','false')<>'true' or u->>'accountFrozen'='true' then raise exception 'Verified active account required';end if;
+   if nullif(b->>'renter','') is not null and coalesce((b->>'rentExpiry')::bigint,0)>now_ms then raise exception 'Building is currently rented';end if;
+   price:=coalesce((b->>'weekPrice')::bigint,0);
+   if price not between 1 and 100000 then raise exception 'Invalid weekly price';end if;
+   if coalesce((u->>'subscriptionExpiry')::timestamptz,now()-interval '1 day')>now() then
+     discount:=case u->>'subscription' when 'prime' then .35 when 'ultra' then .20 else 0 end;
+   end if;
+   price:=greatest(1,round(price*(1-discount))::bigint);
+   perform public.kp_v8_money(a,-price,p_id,'rental_payment',jsonb_build_object('buildingId',p_building));
+   b:=b||jsonb_build_object('renter',a,'renterName',coalesce(u->>'displayName',a),
+      'rentedAt',now_ms,'rentExpiry',now_ms+604800000,'lastRentPaid',price);
+   result:=jsonb_build_object('buildingId',p_building,'renter',a,'paid',price,'rentExpiry',now_ms+604800000);
+ else
+   if a<>'Кайон' then raise exception 'Mayor access required';end if;
+   previous:=b->>'renter';
+   b:=b||jsonb_build_object('renter','','renterName','','rentedAt',0,'rentExpiry',0);
+   result:=jsonb_build_object('buildingId',p_building,'revoked',true,'previousRenter',previous);
+ end if;
+ buildings:=jsonb_set(buildings,array[p_building],b,true);
+ perform public.kp_v8_put('rentBuildings',buildings);
+ insert into public.kp_v8_rental_ops(id,actor,building_id,action,result)
+   values(p_id,a,p_building,p_action,result);
+ if p_action='rent' then
+   perform public.kp_v8_notify(a,'Аренда «'||coalesce(b->>'name','Здание')||'» оформлена на семь суток','system','rental_'||p_id::text);
+ elsif nullif(previous,'') is not null then
+   perform public.kp_v8_notify(previous,'Мэрия завершила аренду «'||coalesce(b->>'name','Здание')||'»','system','rental_revoke_'||p_id::text);
+ end if;
+ return result;
+end; $$;
+
+-- The previous helper combined private licence data without checking the
+-- target role. Do not let an authenticated resident enumerate neighbours.
+create or replace function public.kp_license_status(p_target text) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();d jsonb;u jsonb;
+begin
+ if a is null or p_target is null or not(a=p_target or a='Кайон'
+    or public.kp_v8_role(a,'КСБ') or public.kp_v8_role(a,'Полицейский')) then
+   raise exception 'Private licence data';end if;
+ select document->p_target into d from public.kp_tree_roots where branch='licenses';
+ select document->p_target->'licenses' into u from public.kp_tree_roots where branch='users';
+ return coalesce(u,'{}'::jsonb)||coalesce(d,'{}'::jsonb);
+end; $$;
+
+revoke all on function public.kp_rental_v8(text,uuid,text),public.kp_license_status(text) from public,anon;
+grant execute on function public.kp_rental_v8(text,uuid,text),public.kp_license_status(text) to authenticated;
+commit;
+
+
+-- ===== 015_subscriptions_and_news.sql =====
+-- Kapani v10: subscriptions and news must never mutate protected roots from JS.
+-- Requires 001-014. Safe to run again; live balances are not imported.
+begin;
+
+create table if not exists public.kp_v10_subscription_ops(
+ id uuid primary key,actor text not null,action text not null,
+ plan text,recipient text,result jsonb not null,created_at timestamptz not null default now()
+);
+alter table public.kp_v10_subscription_ops enable row level security;
+revoke all on public.kp_v10_subscription_ops from public,anon,authenticated;
+
+create or replace function public.kp_subscription_v10(
+ p_action text,p_id uuid,p_plan text default null,p_recipient text default null
+) returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();users jsonb;payer jsonb;target jsonb;
+ target_nick text;old public.kp_v10_subscription_ops%rowtype;
+ price bigint:=0;wallet_after bigint;expiry timestamptz;existing_expiry timestamptz;
+ old_rank integer;new_rank integer;plan_start timestamptz:=now();
+ result jsonb;treasury jsonb;now_ms bigint:=(extract(epoch from now())*1000)::bigint;
+begin
+ if a is null or p_id is null or p_action not in ('buy','gift','cancel') then raise exception 'Invalid subscription request';end if;
+ select document into users from public.kp_tree_roots where branch='users' for update;
+ payer:=users->a;
+ if payer is null or payer->>'accountFrozen'='true' or coalesce(payer->>'accountVerified','false')<>'true' then
+   raise exception 'Verified active account required';
+ end if;
+ select * into old from public.kp_v10_subscription_ops where id=p_id;
+ if found then
+   if old.actor<>a or old.action<>p_action or old.plan is distinct from p_plan
+     or old.recipient is distinct from p_recipient then raise exception 'Subscription retry mismatch';end if;
+   return old.result;
+ end if;
+ if p_action='cancel' then
+   users:=jsonb_set(users,array[a,'subscriptionAutoRenew'],'false'::jsonb,true);
+   perform public.kp_v8_put('users',users);
+   result:=jsonb_build_object('success',true,'subscription',payer->>'subscription',
+     'expiresAt',payer->>'subscriptionExpiry','cancelledRenewal',true);
+ else
+   price:=case p_plan when 'plus' then 299 when 'ultra' then 899 when 'prime' then 1499 else null end;
+   if price is null then raise exception 'Unknown subscription plan';end if;
+   target_nick:=case when p_action='gift' then nullif(trim(coalesce(p_recipient,'')),'') else a end;
+   if target_nick is null or (p_action='gift' and target_nick=a) then raise exception 'Choose another recipient';end if;
+   target:=users->target_nick;
+   if target is null or target->>'accountFrozen'='true' then raise exception 'Recipient unavailable';end if;
+   existing_expiry:=case when coalesce(target->>'subscriptionExpiry','') ~ '^20[0-9][0-9]-'
+     then (target->>'subscriptionExpiry')::timestamptz else null end;
+   old_rank:=case when existing_expiry>now() then
+     case target->>'subscription' when 'plus' then 1 when 'ultra' then 2 when 'prime' then 3 else 0 end
+     else 0 end;
+   new_rank:=case p_plan when 'plus' then 1 when 'ultra' then 2 else 3 end;
+   if p_action='gift' and old_rank>new_rank then raise exception 'Recipient has a higher subscription';end if;
+   -- A same-plan purchase extends; a different plan starts a fresh seven-day term.
+   expiry:=case when old_rank=new_rank and target->>'subscription'=p_plan and existing_expiry>now()
+     then existing_expiry+interval '7 days' else now()+interval '7 days' end;
+   wallet_after:=public.kp_v8_money(a,-price,p_id,'subscription_'||p_action,
+     jsonb_build_object('plan',p_plan,'recipient',target_nick));
+   -- kp_v8_money has just updated users/<payer>/balance. Read that version.
+   select document into users from public.kp_tree_roots where branch='users';
+   target:=users->target_nick;
+   if old_rank=new_rank and target->>'subscription'=p_plan and existing_expiry>now() then
+     plan_start:=coalesce(nullif(target->>'subscriptionStart','')::timestamptz,now());
+   end if;
+   target:=target||jsonb_build_object('subscription',p_plan,'subscriptionExpiry',to_char(expiry at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+     'subscriptionStart',to_char(plan_start at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+     'subscriptionAutoRenew',false);
+   perform public.kp_v8_put('users',jsonb_set(users,array[target_nick],target));
+   insert into public.kp_tree_roots(branch) values('municipalTreasury') on conflict do nothing;
+   select document into treasury from public.kp_tree_roots where branch='municipalTreasury' for update;
+   treasury:=coalesce(treasury,'{}'::jsonb)||jsonb_build_object('balance',coalesce((treasury->>'balance')::bigint,0)+price);
+   perform public.kp_v8_put('municipalTreasury',treasury);
+   result:=jsonb_build_object('success',true,'subscription',p_plan,'recipient',target_nick,
+     'price',price,'balance',wallet_after,'expiresAt',expiry,'transactionId',p_id);
+   perform public.kp_v8_notify(target_nick,
+     case when p_action='gift' then 'Подарена подписка '||p_plan||' от '||a else 'Подписка '||p_plan||' оплачена' end,
+     'system','subscription_'||p_id::text);
+ end if;
+ insert into public.kp_v10_subscription_ops(id,actor,action,plan,recipient,result)
+ values(p_id,a,p_action,p_plan,p_recipient,result);
+ return result;
+end; $$;
+
+create or replace function public.kp_news_v10(
+ p_action text,p_news_id text,p_message_id text default null,p_data jsonb default '{}'::jsonb
+) returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();users jsonb;actor jsonb;news jsonb;discussions jsonb;
+ item jsonb;message jsonb;now_ms bigint:=(extract(epoch from now())*1000)::bigint;
+ scope text;news_id text;body text;image_url text;video_url text;op text;msg_type text;resident text;
+begin
+ if a is null or p_action not in ('publish','delete','comment_send','comment_edit','comment_delete','read') or
+   coalesce(p_news_id,'') !~ '^[A-Za-z0-9_-]{8,100}$' then raise exception 'Invalid news request';end if;
+ select document->a into actor from public.kp_tree_roots where branch='users';
+ if actor is null or actor->>'accountFrozen'='true' then raise exception 'Account unavailable';end if;
+ insert into public.kp_tree_roots(branch) values('news'),('newsDiscussions') on conflict do nothing;
+ select document into news from public.kp_tree_roots where branch='news' for update;
+ item:=news->p_news_id;
+ if p_action='publish' then
+   scope:=coalesce(p_data->>'scope','village');
+   if scope not in ('village','lands') or
+     not(a='Кайон' or (scope='village' and public.kp_v8_role(a,'Журналист'))) then
+     raise exception 'News publisher role required';end if;
+   if item is not null then
+     if item->>'author'=a then return item;end if;
+     raise exception 'News identifier already belongs to someone else';
+   end if;
+   if length(trim(coalesce(p_data->>'title',''))) not between 2 and 150 or
+     length(trim(coalesce(p_data->>'content',''))) not between 2 and 10000 then
+     raise exception 'News title or content length invalid';end if;
+   if coalesce(p_data->>'category','general') not in
+     ('general','event','alert','update','meteorology','announcement') then
+     raise exception 'Unknown news category';end if;
+   image_url:=coalesce(p_data->>'imageUrl','');
+   video_url:=coalesce(p_data->>'videoUrl','');
+   if length(image_url)>2500000 or (image_url<>'' and image_url !~ '^(https://|data:image/(png|jpeg|webp);base64,)') or
+      length(video_url)>1500 or (video_url<>'' and video_url !~ '^https://') then
+     raise exception 'Invalid news media URL';end if;
+   item:=jsonb_build_object('id',p_news_id,'scope',scope,'title',left(trim(p_data->>'title'),150),
+     'content',left(trim(p_data->>'content'),10000),'category',coalesce(p_data->>'category','general'),
+     'imageUrl',nullif(image_url,''),'videoUrl',nullif(video_url,''),
+     'author',a,'authorJob',coalesce(actor->>'job','Житель'),'createdAt',now_ms,
+     'date',to_char(now() at time zone 'Europe/Moscow','DD.MM.YYYY'),
+     'time',to_char(now() at time zone 'Europe/Moscow','HH24:MI'));
+   perform public.kp_v8_put('news',jsonb_set(coalesce(news,'{}'),array[p_news_id],item,true));
+   -- In-app notifications are server-owned; do not fan out with client-side tree writes.
+   select document into users from public.kp_tree_roots where branch='users' for update;
+   for resident in select key from jsonb_each(coalesce(users,'{}'::jsonb)) loop
+     if resident<>a then
+       users:=public.kp_tree_set_deep(users,array[resident,'notifications','news_'||p_news_id],
+         jsonb_build_object('id','news_'||p_news_id,'text','Новая новость «'||left(item->>'title',100)||'»',
+           'type','news','read',false,'seen',false,'createdAt',now_ms,
+           'time',to_char(now() at time zone 'Europe/Moscow','HH24:MI')));
+     end if;
+   end loop;
+   perform public.kp_v8_put('users',users);
+   return item;
+ elsif p_action='delete' then
+   if item is null then return jsonb_build_object('deleted',true);end if;
+   if a<>'Кайон' and item->>'author'<>a then raise exception 'News author required';end if;
+   perform public.kp_v8_put('news',coalesce(news,'{}')-p_news_id);
+   return jsonb_build_object('deleted',true);
+ end if;
+ if item is null then raise exception 'News not found';end if;
+ if p_action<>'read' and coalesce(p_message_id,'') !~ '^[A-Za-z0-9_-]{8,100}$' then
+   raise exception 'Invalid discussion message ID';end if;
+ select document into discussions from public.kp_tree_roots where branch='newsDiscussions' for update;
+ discussions:=coalesce(discussions,'{}'::jsonb);
+ if p_action='read' then
+   discussions:=public.kp_tree_set_deep(discussions,array[p_news_id,'lastRead',a],to_jsonb(now_ms));
+   perform public.kp_v8_put('newsDiscussions',discussions);
+   select document into users from public.kp_tree_roots where branch='users' for update;
+   users:=public.kp_tree_set_deep(users,array[a,'newsRead',p_news_id],to_jsonb(now_ms));
+   perform public.kp_v8_put('users',users);
+   return jsonb_build_object('readAt',now_ms);
+ end if;
+ message:=discussions->p_news_id->'messages'->p_message_id;
+ if p_action='comment_send' then
+   if message is not null then
+     if message->>'nick'=a then return message;end if;
+     raise exception 'Discussion message ID conflict';
+   end if;
+   body:=trim(coalesce(p_data->>'text',''));
+   image_url:=coalesce(p_data->>'mediaData','');
+   msg_type:=coalesce(p_data->>'msgType',case when image_url<>'' then 'image' else 'text' end);
+   if length(body)>4000 or (length(body)=0 and length(image_url)=0) or
+     length(image_url)>2000000 or
+     msg_type not in ('text','image','video','voice','video_circle') or
+     (image_url<>'' and image_url !~ '^https://' and
+       not(msg_type='image' and image_url ~ '^data:image/(png|jpeg|webp);base64,')) then
+     raise exception 'Invalid discussion content';end if;
+   message:=jsonb_build_object('id',p_message_id,'nick',a,
+     'avatar',coalesce(actor->>'avatar','assets/avatar.svg'),'text',body,
+     'mediaData',nullif(image_url,''),'msgType',msg_type,
+     'time',to_char(now() at time zone 'Europe/Moscow','HH24:MI'),'createdAt',now_ms);
+   discussions:=public.kp_tree_set_deep(discussions,array[p_news_id,'messages',p_message_id],message);
+ elsif p_action='comment_edit' then
+   if message is null or message->>'nick'<>a then raise exception 'Message author required';end if;
+   body:=trim(coalesce(p_data->>'text',''));
+   if length(body) not between 1 and 4000 then raise exception 'Message text length invalid';end if;
+   message:=message||jsonb_build_object('text',body,'edited',true);
+   discussions:=public.kp_tree_set_deep(discussions,array[p_news_id,'messages',p_message_id],message);
+ elsif p_action='comment_delete' then
+   if message is null then return jsonb_build_object('deleted',true);end if;
+   if message->>'nick'<>a and a<>'Кайон' then raise exception 'Message author required';end if;
+   discussions:=discussions #- array[p_news_id,'messages',p_message_id];
+ else raise exception 'Invalid news action';end if;
+ perform public.kp_v8_put('newsDiscussions',discussions);
+ if p_action='comment_send' and item->>'author' is distinct from a then
+   perform public.kp_v8_notify(item->>'author','Новый комментарий к новости «'||left(item->>'title',65)||'»',
+     'news','news_comment_'||p_message_id);
+ end if;
+ return case when p_action='comment_delete' then jsonb_build_object('deleted',true) else message end;
+end; $$;
+
+revoke all on function public.kp_subscription_v10(text,uuid,text,text),
+ public.kp_news_v10(text,text,text,jsonb) from public,anon;
+grant execute on function public.kp_subscription_v10(text,uuid,text,text),
+ public.kp_news_v10(text,text,text,jsonb) to authenticated;
+commit;

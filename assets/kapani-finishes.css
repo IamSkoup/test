@@ -1,0 +1,49 @@
+/* Kapani — profile and mobile messenger refinements, layered over v8. */
+#profile .profile-header{padding:34px 22px 24px;border-radius:24px;background:linear-gradient(145deg,rgba(71,122,79,.20),rgba(13,42,28,.42));border-color:rgba(150,201,157,.28)}
+#profile .profile-header .p-av{width:118px;height:118px;object-fit:cover;border-radius:32px}
+#profile #avatarFrameContainer{isolation:isolate;margin-bottom:4px}
+#profile #avatarFrame{inset:-9px!important;border-radius:36px!important;pointer-events:none}
+#profile .p-name{font-size:clamp(23px,3vw,34px);letter-spacing:-.5px}
+#profile .p-job{color:#a4d6af;font-size:13px;margin-top:5px}
+#profile .v8-profile-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-top:12px;margin-bottom:20px}
+#profile .v8-profile-actions>.btn{min-width:0;min-height:66px;border-radius:16px;background:linear-gradient(145deg,#274437,#172a21);border:1px solid rgba(174,223,171,.23);white-space:normal;line-height:1.3}
+#profile .v8-profile-actions>.btn:active{transform:scale(.98)}
+#profile .v9-profile-about{padding:16px 20px;background:rgba(116,177,124,.08);border:1px solid var(--v8-line);border-radius:18px;margin:0 0 16px;white-space:pre-wrap;color:var(--text);line-height:1.6}
+#profile .v9-profile-more{margin-bottom:18px;background:var(--surface2);border-radius:18px;border:1px solid var(--v8-line);padding:10px 14px}
+#profile .v9-profile-more summary{cursor:pointer;font-size:13px;font-weight:800;color:var(--v8-green);padding:8px 0}
+#profile .v9-profile-more>div{display:flex;gap:8px;flex-wrap:wrap;padding:10px 0}
+#profile .v9-profile-more .btn{min-height:42px;flex:1 1 130px}
+.v9-business-statement{border-radius:16px;padding:14px;background:var(--v8-soft);border:1px solid var(--v8-line);margin:10px 0 18px}
+.v9-ledger-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:9px 0;border-bottom:1px solid var(--v8-line);font-size:12px}
+.v9-ledger-row:last-child{border-bottom:0}.v9-ledger-row small{display:block;color:var(--muted);margin-top:3px}
+.v9-ledger-row strong{font-size:14px;color:var(--v8-green)}.v9-ledger-row strong.out{color:#e8b58f}
+.v9-rent-editor{display:grid;gap:12px}.v9-rent-editor img{width:100%;max-height:220px;object-fit:contain;border-radius:16px;background:var(--v8-soft)}
+.v9-fare-explain{font-size:12px;line-height:1.6;color:var(--muted);padding:12px;border-left:3px solid var(--v8-green);border-radius:9px;background:var(--v8-soft);margin:12px 0}
+.v9-fare-explain strong{color:var(--v8-green)}
+.v9-draft-progress{height:5px;border-radius:4px;overflow:hidden;background:#ffffff1f;margin:6px 0}.v9-draft-progress>span{display:block;height:100%;width:0;background:var(--v8-green);transition:width .2s}
+#messages .msg-panel.active>.card,#messages #dmChatView>.card{background:linear-gradient(160deg,rgba(25,52,38,.95),rgba(12,32,24,.97));border:1px solid var(--v8-line);border-radius:20px}
+#messages .dm-header-row{display:flex;gap:10px;align-items:center;padding:10px 2px;border-bottom:1px solid var(--v8-line)}
+#messages .dm-back{min-height:38px;min-width:42px;border-radius:11px}
+#messages .chat-input-row,#messages .dm-input-row{display:flex;align-items:center;gap:8px;padding:10px 0 0}
+#messages #chatMessages,#messages #dmMessages{height:clamp(290px,52dvh,660px);overflow-y:auto;scrollbar-color:#507c61 transparent}
+#messages .v8-message-menu{min-width:38px;color:#b6d7bb}
+#messages .v8-message-actions{opacity:.9}
+#dmUserList>*{min-width:0}
+@media(max-width:660px){
+ #profile .profile-header{padding:28px 14px 20px}
+ #profile .v8-profile-actions{gap:7px}
+ #profile .v8-profile-actions>.btn{padding:10px 6px;font-size:11px;min-height:66px}
+ #profile #avatarFrameContainer .p-av{width:104px;height:104px;border-radius:28px}
+ #messages{padding-left:0!important;padding-right:0!important;max-width:100vw}
+ #messages .msg-tabs{position:sticky;top:0;z-index:12;background:var(--surface,#10271d);padding:8px 12px}
+ #messages .msg-panel.active>.card,#messages #dmChatView>.card{padding:10px!important;border-radius:13px;border-left:0;border-right:0}
+ #messages #chatMessages,#messages #dmMessages{height:clamp(260px,calc(100dvh - 385px),620px);min-height:250px;padding:6px 2px}
+ #messages .chat-input-row,#messages .dm-input-row{gap:4px!important;position:sticky;bottom:0;background:var(--surface,#14251e);z-index:10;padding-bottom:max(8px,env(safe-area-inset-bottom))}
+ #messages .chat-input-row .btn,#messages .dm-input-row .btn{min-width:40px;min-height:44px;padding:8px}
+ #messages .chat-input-row .media-ico-btn,#messages .dm-input-row .media-ico-btn{flex:0 0 36px;min-width:36px}
+ #messages #chatInput,#messages #dmInput{min-width:0;width:10px;flex:1}
+ #messages .v8-media-album.multi{grid-template-columns:repeat(2,minmax(0,1fr))}
+ #messages .v8-message-actions{flex-wrap:wrap;align-items:center}
+ #messages .v8-reactions{max-width:calc(100% - 44px)}
+ .v9-business-statement{padding:10px}
+}
