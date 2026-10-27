@@ -756,175 +756,62 @@ ready(function(){
 
   // Штраф через форму на странице (без prompt — надёжно на телефоне)
   let _submitDutyFineBusy = false;
+  // Supabase forbids changing another resident's balance from the browser.
+  // Only the authorized atomic SQL operation can issue a fine.
+  let lastDutyFineAttempt = null;
   window.submitDutyFine = async function(){
-    if(_submitDutyFineBusy) return toast('⏳ Штраф уже отправляется…','gold');
-
-    const fineBtn = qs('dutyFineSubmitBtn');
-    const myNick = (typeof currentNick !== 'undefined' ? currentNick : null)
-                || localStorage.getItem('kp_s')
-                || sessionStorage.getItem('kp_s');
-    if(!myNick) return toast('❌ Не авторизован','red');
-
-    // Validate before locking the button.
-    const nameInput = (qs('dutyFineNick')?.value||'').trim();
-    const reason = (qs('dutyFineReason')?.value||'').trim();
-    const amtRaw = String(qs('dutyFineAmt')?.value || '').trim();
-    const amt = /^\d+$/.test(amtRaw) ? Number(amtRaw) : NaN;
-    if(!nameInput) return toast('⚠️ Укажите имя нарушителя','gold');
-    if(!reason) return toast('⚠️ Укажите причину штрафа','gold');
-    if(!Number.isSafeInteger(amt) || amt<=0) return toast('⚠️ Укажите корректную сумму','gold');
-
-    _submitDutyFineBusy = true;
-    if(fineBtn){ fineBtn.disabled = true; fineBtn.textContent='⏳ Выписываем…'; }
-    // Belt-and-suspenders: no matter what happens below (including an error that
-    // somehow escapes the try/catch, or a Firebase call that hangs without ever
-    // resolving/rejecting), the button must never stay stuck longer than this.
-    const fineSafetyTimer = setTimeout(()=>{
-      // Keep the logical lock until the in-flight Firebase operation reaches finally.
-      // This prevents a hung request from being followed by a second deduction.
-      const b = qs('dutyFineSubmitBtn');
-      if(b){ b.disabled = true; b.textContent = '⏳ Операция всё ещё выполняется…'; }
-    }, 20000);
-
-    try {
-      const meSnap = await get(userRef(myNick));
-      if(!meSnap.exists()) throw new Error('Профиль сотрудника не найден');
-      const me = meSnap.val() || {};
-      const isKsb = hasMunicipalJob(me,'КСБ') || me.job==='КСБ';
-      const isPolice = hasMunicipalJob(me,'Полицейский') || me.job==='Полицейский';
-      const isAdmin = myNick === ADMIN;
-      if(!isKsb && !isPolice && !isAdmin) throw new Error('Только КСБ и полиция могут выписывать штрафы');
-
-      const issuerRole = isKsb ? 'КСБ' : (isPolice ? 'Полиция' : 'Мэрия');
-      let target = null;
-      let targetNick = null;
-      const cache = (window.allUsersCache && Object.keys(window.allUsersCache).length)
-          ? window.allUsersCache : allUsersCache;
-      const q = nameInput.toLowerCase();
-
-      // IMPORTANT: the Firebase object key is the canonical nick.
-      // Never let u.nick overwrite that key (the previous `{nick,...u}` did exactly that
-      // and could turn a valid cached user into a lookup like users/<stale nick>).
-      for(const [nick, u] of Object.entries(cache || {})){
-        const dn = String((u && u.displayName) || (u && u.nick) || nick).trim().toLowerCase();
-        if(dn === q || String(nick).toLowerCase() === q){ target={...u}; targetNick=nick; break; }
-      }
-
-      if(!target){
-        const allSnap = await get(ref(db,'users'));
-        const allU = allSnap.val() || {};
-        // Reuse the freshly fetched directory for the rest of the session.
-        allUsersCache = allU;
-        window.allUsersCache = allUsersCache;
-        for(const [nick, u] of Object.entries(allU)){
-          const dn = String((u && u.displayName) || (u && u.nick) || nick).trim().toLowerCase();
-          if(dn === q || String(nick).toLowerCase() === q){ target={...u}; targetNick=nick; break; }
-        }
-      }
-
-      if(!target || !targetNick) throw new Error('Житель с таким именем не найден');
-      const tnick = targetNick;
-      if(tnick === myNick) throw new Error('Нельзя оштрафовать самого себя');
-
-      const fineSnap = await get(userRef(tnick));
-      if(!fineSnap.exists()) throw new Error('Пользователь не найден');
-
-      const tUser = fineSnap.val() || {};
-      const fineDisplayNick = (u, fallback) => {
-        const dn = u && u.displayName != null ? String(u.displayName).trim() : '';
-        const nk = u && u.nick != null ? String(u.nick).trim() : '';
-        return dn || nk || fallback || '';
-      };
-      const targetLabel = fineDisplayNick(tUser, tnick);
-      const myLabel = fineDisplayNick(me, myNick);
-      if(!Number.isSafeInteger(amt) || amt <= 0) throw new Error('Некорректная сумма штрафа');
-      const fineTxRef = push(txLogRef(tnick));
-      const fineTxId = fineTxRef.key;
-      const txEntry = {
-          type:'out',
-          who:`${issuerRole} (${myLabel})`,
-          amt,
-          desc:`Штраф: ${reason}`,
-          ...(packFullDateTimeStr())
-      };
-      // В первый запуск Firebase может дать transaction callback значение null
-      // из-за отсутствия локального кеша, хотя пользователь уже есть на сервере.
-      // Поэтому сначала получаем актуальный объект пользователя и используем его
-      // как безопасный fallback внутри транзакции. Это устраняет ложное
-      // `Пользователь не найден` при первом нажатии.
-      const freshUserSnap = await get(userRef(tnick));
-      if(!freshUserSnap.exists()) throw new Error('Пользователь не найден');
-      const freshUser = freshUserSnap.val() || {};
-      const balanceRef = ref(db, `users/${tnick}/balance`);
-      const txResult = await runTransaction(userRef(tnick), currentUser => {
-          const base = (currentUser === null || currentUser === undefined) ? freshUser : currentUser;
-          if(!base) return;
-          const currentValue = Number(base.balance || 0);
-          if(!Number.isFinite(currentValue)) throw new Error('Некорректный баланс нарушителя');
-          const nextBalance = currentValue - amt;
-          if(!Number.isFinite(nextBalance)) throw new Error('Некорректное списание');
-          if(nextBalance <= Number(window.MIN_BALANCE_ALLOWED ?? -Infinity)) throw new Error('Нельзя выписать штраф: баланс достигнет критического лимита');
-          return {...base, balance: nextBalance};
+    if(_submitDutyFineBusy)return toast('Штраф уже оформляется','gold');
+    const myNick=window._getCurrentNick?.();
+    if(!myNick)return toast('Сначала войдите в аккаунт','red');
+    const name=(qs('dutyFineNick')?.value||'').trim();
+    const reason=(qs('dutyFineReason')?.value||'').trim();
+    const amountText=(qs('dutyFineAmt')?.value||'').trim();
+    const amount=/^\d+$/.test(amountText)?Number(amountText):NaN;
+    if(!name)return toast('Укажите нарушителя','gold');
+    if(reason.length<3||reason.length>200)return toast('Укажите причину штрафа (3–200 символов)','gold');
+    if(!Number.isSafeInteger(amount)||amount<=0||amount>1000000)
+      return toast('Сумма штрафа должна быть от 1 до 1 000 000 ₽','gold');
+    const btn=qs('dutyFineSubmitBtn');
+    _submitDutyFineBusy=true;
+    if(btn){btn.disabled=true;btn.textContent='Выписываем…';}
+    try{
+      const usersSnap=await get(ref(db,'users'));
+      const users=usersSnap.val()||{};
+      const match=Object.entries(users).filter(([nick,u])=>
+        nick.toLowerCase()===name.toLowerCase() ||
+        String(u?.displayName||'').toLowerCase()===name.toLowerCase()
+      );
+      if(match.length!==1)throw new Error(match.length?'Уточните никнейм: найдено несколько жителей':'Житель не найден');
+      const target=match[0][0];
+      if(target===myNick)throw new Error('Нельзя выписать штраф самому себе');
+      const fingerprint=JSON.stringify([myNick,target,amount,reason]);
+      if(lastDutyFineAttempt?.fingerprint!==fingerprint)
+        lastDutyFineAttempt={fingerprint,id:crypto.randomUUID()};
+      const rpc=window.kapaniSupabase;
+      if(!rpc)throw new Error('Supabase ещё не подключён');
+      const {data,error}=await rpc.rpc('kp_duty_fine',{
+        p_target:target,p_amount:amount,p_reason:reason,p_request_id:lastDutyFineAttempt.id
       });
-      if(!txResult.committed) throw new Error('Firebase не подтвердил списание');
-      // Запись операции — отдельным update, чтобы она не могла блокировать
-      // списание баланса из-за старых/битых полей в объекте пользователя.
-      await set(ref(db, `users/${tnick}/txlog/${fineTxId}`), txEntry);
-      await window.addMunicipalTreasury?.(amt, `Штраф: ${reason}`, {sourceNick:tnick,sourceType:'fine'});
-
-      // Update the local cache immediately as well. The target user's own
-      // `users/<currentNick>` realtime listener will update their header/balance
-      // without a page reload; this cache update also keeps any already-open
-      // profile/rating/business UI from showing the old balance until its next read.
-      try {
-        const committedUserSnap = await get(userRef(tnick));
-        const committedUser = committedUserSnap.exists() ? committedUserSnap.val() : null;
-        if(committedUser){
-          allUsersCache[tnick] = committedUser;
-          window.allUsersCache = allUsersCache;
-          if(window._visitorProfileNick === tnick && typeof renderVisitorProfilePage === 'function'){
-            Promise.resolve(renderVisitorProfilePage(tnick)).catch(()=>{});
-          }
-          const modalOpen = qs('userProfileModal')?.classList.contains('open');
-          if(modalOpen && viewingProfileNick === tnick && typeof window.openUserProfile === 'function'){
-            Promise.resolve(window.openUserProfile(tnick)).catch(()=>{});
-          }
-        }
-      } catch(cacheErr) { console.warn('[submitDutyFine] local cache refresh:', cacheErr); }
-
-      // Notifications are best-effort. A broken/slow notification write must
-      // never make the fine itself look like it is still processing.
-      const emoji = isPolice ? '👮' : '🛡';
-      const notificationJobs = [
-        typeof pushNotification === 'function'
-          ? Promise.resolve().then(()=>pushNotification(tnick, `${emoji} ${issuerRole} выписало штраф ${amt}₽ — ${reason} (от ${myLabel})`, 'money'))
-          : Promise.resolve(),
-        typeof pushNotification === 'function'
-          ? Promise.resolve().then(()=>pushNotification(ADMIN, `${emoji} ${issuerRole} ${myLabel} оштрафовал ${targetLabel} на ${amt}₽ — ${reason}`, 'system'))
-          : Promise.resolve()
-      ];
-      await Promise.allSettled(notificationJobs);
-
-      if(qs('dutyFineNick')) qs('dutyFineNick').value='';
-      if(qs('dutyFineReason')) qs('dutyFineReason').value='';
-      if(qs('dutyFineAmt')) qs('dutyFineAmt').value='';
-      toast(`✅ Штраф ${amt}₽ выписан ${targetLabel}`,'green');
-    } catch(e){
-      console.error('[submitDutyFine]', e);
-      toast('❌ Не удалось выписать штраф: '+((e&&e.message)||'ошибка'),'red');
-    } finally {
-      _submitDutyFineBusy = false;
-      clearTimeout(fineSafetyTimer);
-      // Re-query fresh rather than trusting the closure-captured `fineBtn` —
-      // this is the master fix for the button getting stuck on "Выписываем…":
-      // the old code silently skipped resetting the button whenever
-      // fineBtn.isConnected was falsy for any reason. Always reset the
-      // *current* element in the DOM, unconditionally.
-      const btnNow = qs('dutyFineSubmitBtn');
-      if(btnNow){
-        btnNow.disabled = false;
-        btnNow.textContent='💸 Выписать штраф';
+      if(error)throw error;
+      if(!data?.ok)throw new Error('Сервер не подтвердил штраф');
+      lastDutyFineAttempt=null;
+      for(const id of ['dutyFineNick','dutyFineReason','dutyFineAmt']){
+        const input=qs(id);if(input)input.value='';
       }
+      if(typeof pushNotification==='function'){
+        await Promise.allSettled([
+          pushNotification(target,`Штраф ${amount} ₽ от КСБ/полиции. Причина: ${reason}`,'money'),
+          pushNotification(ADMIN,`${myNick} выписал штраф ${amount} ₽ пользователю ${target}. Причина: ${reason}`,'system')
+        ]);
+      }
+      toast(`Штраф ${amount} ₽ выписан ${target}`,'green');
+    }catch(error){
+      console.error('[kp_duty_fine]',error);
+      toast('Не удалось выписать штраф: '+(error.message||error),'red');
+    }finally{
+      _submitDutyFineBusy=false;
+      const current=qs('dutyFineSubmitBtn');
+      if(current){current.disabled=false;current.textContent='Выписать штраф';}
     }
   };
 

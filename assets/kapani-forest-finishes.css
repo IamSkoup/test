@@ -60,6 +60,37 @@ html[data-season] .total-row { background: linear-gradient(110deg, rgba(30, 62, 
 #home .home-help-row, html[data-season] .home-map-details {
   background: linear-gradient(115deg, rgba(19, 52, 35, .96), rgba(11, 38, 28, .94)) !important;
 }
+#callModal .kapani-forest-dialog,
+#infoModal .kapani-forest-dialog {
+  background: linear-gradient(145deg, #234c34 0%, #173b2b 45%, #0d271e 100%);
+  border: 1px solid rgba(153, 205, 156, .31) !important;
+  box-shadow: 0 28px 75px rgba(2, 16, 9, .64), inset 0 1px rgba(226, 255, 222, .08) !important;
+  color: #f0f7ea;
+}
+#callModal .kapani-forest-dialog input,
+#callModal .kapani-forest-dialog select,
+#callModal .kapani-forest-dialog textarea {
+  background: rgba(8, 28, 20, .78) !important;
+  border-color: rgba(131, 185, 138, .27) !important;
+  color: #f4fff0 !important;
+}
+#callModal .kapani-forest-dialog input:focus,
+#callModal .kapani-forest-dialog select:focus,
+#callModal .kapani-forest-dialog textarea:focus {
+  border-color: #7cba83 !important;
+  box-shadow: 0 0 0 3px rgba(112, 180, 120, .15);
+}
+#hospitalAmbulanceCard {
+  border-color: rgba(117, 194, 139, .35) !important;
+  background: linear-gradient(125deg, rgba(29, 76, 49, .93), rgba(13, 47, 34, .97)) !important;
+}
+#medicalCalls .dispatch-call {
+  background: rgba(11, 42, 28, .86);
+  border: 1px solid rgba(145, 205, 155, .3);
+  border-radius: 14px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
 html[data-season] .mayor-heading, html[data-season] .mayor-overview-lead {
   background: linear-gradient(119deg, #153a28, #2e6543 58%, #173d30) !important;
 }

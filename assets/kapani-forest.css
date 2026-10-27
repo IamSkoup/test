@@ -199,13 +199,13 @@ html[data-season] .bottom-nav .bn-item:hover {
   background-position:center !important;
 }
 #home .service-group:first-child .quick-card:nth-child(1) {
-  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.18) 92%),url('./village-street.webp') !important;
+  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.18) 92%),url('./shop-forest.webp') !important;
 }
 #home .service-group:first-child .quick-card:nth-child(2) {
-  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.24) 92%),url('./forest-road.webp') !important;
+  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.24) 92%),url('./taxi-forest.webp') !important;
 }
 #home .service-group:first-child .quick-card:nth-child(3) {
-  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.16) 92%),url('./village-street.webp') !important;
+  background-image:linear-gradient(0deg,rgba(5,25,15,.98),rgba(5,25,15,.16) 92%),url('./delivery-forest.webp') !important;
   background-position:65% center !important;
 }
 #home .service-group:first-child .quick-card:hover { filter:brightness(1.13); }

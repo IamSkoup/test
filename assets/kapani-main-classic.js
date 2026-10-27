@@ -2033,6 +2033,7 @@ async function setGeneralChatPresence(active){
 }
 function enterService(page){
     const service = page==='messages'?'messages':page==='market'?'market':page==='home'?'home':page==='tasks'?'tasks':(['driverPage','deliveryPage'].includes(page)?'orders':page==='adminPage'?'admin':page==='ratings'?'ratings':(['businesses','bizDetail','bizOwnerPanel'].includes(page)?'business':page==='dutyPage'?'duty':null));
+    if(page==='hospitalPanel') startMedicalCallsListener();
     if(!service) return;
     if(service==='home'){
         loadAllUsersCache().then(users=>{ if(curPage==='home') renderHomeStats_users(users); })
@@ -2070,6 +2071,7 @@ function leaveService(page){
         delete listeners.bizOrders;
     }
     if(page==='dutyPage') stopCallsListener();
+    if(page==='hospitalPanel') stopMedicalCallsListener();
 }
 function attachListeners(){
     attachUserListener();
@@ -2422,55 +2424,98 @@ function updateHeader(u) {
 let _callsListenerStarted = false;
 let _lastCalls = {};
 let _callsSeen = false;
-function startCallsListener(){
-    if(_callsListenerStarted) return;
-    _callsListenerStarted = true;
-    const cRef = ref(db,'calls');
-    const cb = (snap)=>{
-        const data = snap.val() || {};
-        // Найти новые активные вызовы (по сравнению с прошлым снимком)
-        if(_callsSeen){
-            Object.entries(data).forEach(([id, c])=>{
-                if(!c || c.status==='closed') return;
-                if(!_lastCalls[id] && c.from !== currentNick){
-                    toast(`📞 Новый вызов: ${escHtml(c.name||'?')} — ${escHtml((c.desc||'').slice(0,40))}`, 'red');
-                    try{ if(window._iosAudioCtx){} }catch(e){}
+let _callsPollTimer = null;
+let _medicalPollTimer = null;
+let _lastMedicalCalls = {};
+let _medicalCallsSeen = false;
+let _securityCallsRefreshing = false;
+let _medicalCallsRefreshing = false;
+async function pollDispatchCalls(kind){
+    const isMedical = kind==='medical';
+    if(isMedical ? _medicalCallsRefreshing : _securityCallsRefreshing) return;
+    if(isMedical) _medicalCallsRefreshing=true;
+    else _securityCallsRefreshing=true;
+    try{
+        const {data,error}=await supabase.rpc('kp_dispatch_list',{p_kind:kind});
+        if(error) throw error;
+        if(isMedical ? !_medicalPollTimer : !_callsListenerStarted) return;
+        const fresh=data||{};
+        const old=isMedical?_lastMedicalCalls:_lastCalls;
+        const hasSeen=isMedical?_medicalCallsSeen:_callsSeen;
+        if(hasSeen){
+            Object.entries(fresh).forEach(([id,c])=>{
+                if(!old[id] && c?.from!==currentNick){
+                    toast(`${isMedical?'Скорая помощь':'КСБ / Полиция'}: новый вызов от ${c.name||'жителя'}`,'gold');
                 }
             });
         }
-        _lastCalls = data;
-        _callsSeen = true;
-        const active = Object.entries(data).filter(([,c])=>c && c.status!=='closed');
-        const badge = qs('dutyCallsBadge');
-        if(badge){ badge.textContent = active.length>0?active.length:''; badge.style.display = active.length>0?'inline-block':'none'; }
-        if(curPage==='dutyPage') renderDutyCalls(data);
-    };
-    addServiceListener('duty','calls',cRef,cb);
+        if(isMedical){
+            _lastMedicalCalls=fresh;_medicalCallsSeen=true;
+            const badge=qs('medicalCallsBadge');
+            if(badge){const n=Object.keys(fresh).length;badge.textContent=n||'';badge.style.display=n?'inline-block':'none';}
+            if(curPage==='hospitalPanel') renderMedicalCalls(fresh);
+        } else {
+            _lastCalls=fresh;_callsSeen=true;
+            const badge=qs('dutyCallsBadge');
+            if(badge){const n=Object.keys(fresh).length;badge.textContent=n||'';badge.style.display=n?'inline-block':'none';}
+            if(curPage==='dutyPage') renderDutyCalls(fresh);
+        }
+    }catch(error){
+        console.error('[dispatch]',kind,error);
+        const host=qs(isMedical?'medicalCalls':'dutyCalls');
+        if(host && curPage===(isMedical?'hospitalPanel':'dutyPage')){
+            host.textContent='Не удалось загрузить вызовы: '+(error.message||error);
+        }
+    }finally{
+        if(isMedical)_medicalCallsRefreshing=false;
+        else _securityCallsRefreshing=false;
+    }
 }
-function renderDutyCalls(data){
-    const host = qs('dutyCalls'); if(!host) return;
-    data = data || _lastCalls || {};
+function startCallsListener(){
+    if(_callsListenerStarted) return;
+    _callsListenerStarted = true;
+    pollDispatchCalls('security');
+    _callsPollTimer=setInterval(()=>pollDispatchCalls('security'),10000);
+}
+function startMedicalCallsListener(){
+    if(_medicalPollTimer) return;
+    _medicalPollTimer=setInterval(()=>pollDispatchCalls('medical'),10000);
+    pollDispatchCalls('medical');
+}
+function renderDispatchCalls(data,kind){
+    const isMedical=kind==='medical';
+    const host=qs(isMedical?'medicalCalls':'dutyCalls');if(!host)return;
+    data=data||{};
     const active = Object.entries(data)
         .filter(([,c])=>c && c.status!=='closed')
         .sort((a,b)=>(b[1].createdAt||0)-(a[1].createdAt||0));
     if(!active.length){ host.innerHTML = '<div style="color:var(--muted);font-size:13px;">Нет активных вызовов</div>'; return; }
     host.innerHTML = active.map(([id,c])=>`
-        <div style="border:1px solid rgba(248,113,113,.3);background:rgba(248,113,113,.06);border-radius:14px;padding:14px;margin-bottom:10px;">
+        <div class="dispatch-call" style="border:1px solid rgba(125,190,140,.3);background:rgba(22,65,38,.5);border-radius:14px;padding:14px;margin-bottom:10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <div style="font-weight:900;font-size:14px;color:var(--red);">📞 ${escHtml(c.name||'Без имени')}</div>
+                <div style="font-weight:900;font-size:14px;color:var(--primary);">${isMedical?'Скорая помощь':'Вызов КСБ'} — ${escHtml(c.name||'Без имени')}</div>
                 <div style="font-size:11px;color:var(--muted);">${escHtml(c.time||'')}</div>
             </div>
             <div style="font-size:13px;margin-bottom:4px;"><b>📍 Адрес:</b> ${escHtml(c.address||'—')}</div>
             <div style="font-size:13px;margin-bottom:8px;white-space:pre-wrap;"><b>📝</b> ${escHtml(c.desc||'')}</div>
-            ${c.photo?`<img loading="lazy" decoding="async" src="${escHtml(c.photo)}" onclick="openImgViewer('${jsEsc(c.photo)}')" style="width:100%;border-radius:12px;margin-bottom:8px;max-height:240px;object-fit:cover;cursor:pointer;">`:''}
-            <button class="btn btn-primary btn-sm" onclick="closeDutyCall('${jsEsc(id)}')">✅ Закрыть вызов</button>
+            ${c.photo?`<img loading="lazy" decoding="async" src="${escHtml(c.photo)}" onclick="openImgViewer(this.src)" style="width:100%;border-radius:12px;margin-bottom:8px;max-height:240px;object-fit:cover;cursor:pointer;">`:''}
+            <button class="btn btn-primary btn-sm" onclick="${isMedical?'closeMedicalCall':'closeDutyCall'}('${jsEsc(id)}')">Закрыть вызов</button>
         </div>
     `).join('');
 }
-window.closeDutyCall = async function(id){
-    try{ await update(ref(db,`calls/${id}`), { status:'closed', closedBy: currentNick, closedAt: Date.now() }); toast('✅ Вызов закрыт','green'); }
-    catch(e){ toast('❌ Ошибка','red'); }
-};
+function renderDutyCalls(data){renderDispatchCalls(data||_lastCalls,'security');}
+function renderMedicalCalls(data){renderDispatchCalls(data||_lastMedicalCalls,'medical');}
+async function closeDispatchCall(kind,id){
+    try{
+        const {data,error}=await supabase.rpc('kp_dispatch_close',{p_kind:kind,p_call_id:id});
+        if(error)throw error;
+        if(!data?.ok)throw new Error('Вызов не закрыт');
+        toast('Вызов закрыт','green');
+        await pollDispatchCalls(kind);
+    }catch(e){toast('Не удалось закрыть вызов: '+(e.message||e),'red');}
+}
+window.closeDutyCall=id=>closeDispatchCall('security',id);
+window.closeMedicalCall=id=>closeDispatchCall('medical',id);
 function updateHeader_balance(u){
     if(!u) return;
     const balance=Number(u.balance||0);
@@ -2484,10 +2529,13 @@ window.goToWorkerPage=function(){get(userRef(currentNick)).then(snap=>{if(!snap.
 function updateBadge(count){const badge=qs('notifyBadge');badge.textContent=count>0?(count>9?'9+':count):'';badge.style.display=count>0?'block':'none';}
 function stopCallsListener(){
     if(!_callsListenerStarted) return;
-    const item=serviceListeners.duty?.calls;
-    if(item){ try{off(item.ref,'value',item.fn);}catch(e){} }
-    removeAllServiceListeners('duty');
+    if(_callsPollTimer)clearInterval(_callsPollTimer);
+    _callsPollTimer=null;
     _callsListenerStarted=false; _callsSeen=false; _lastCalls={};
+}
+function stopMedicalCallsListener(){
+    if(_medicalPollTimer)clearInterval(_medicalPollTimer);
+    _medicalPollTimer=null;_medicalCallsSeen=false;_lastMedicalCalls={};
 }
 
 
@@ -4783,7 +4831,17 @@ window.openCallModal = function(){
         nameEl.value = (u && (u.displayName || u.name)) || currentNick || '';
     }
     const prev = qs('callPhotoPreview'); if(prev){ prev.style.display='none'; prev.removeAttribute('src'); }
+    window.updateCallModalKind();
     m.style.display = 'flex';
+};
+window.updateCallModalKind = function(){
+    const medical=qs('callKind')?.value==='medical';
+    const title=qs('callModalTitle');
+    const hint=qs('callModalHint');
+    if(title)title.textContent=medical?'Вызов скорой помощи':'Вызов КСБ / Полиции';
+    if(hint)hint.textContent=medical
+        ? 'Опишите, кому требуется медицинская помощь. Вызов получат врач и помощник врача.'
+        : 'Опишите ситуацию. Вызов получат сотрудники КСБ и полиции.';
 };
 window.closeCallModal = function(){
     const m = qs('callModal'); if(m) m.style.display = 'none';
@@ -4799,24 +4857,49 @@ window.handleCallPhoto = async function(e){
     }catch(err){ toast('❌ Не удалось обработать фото','red'); }
     e.target.value = '';
 };
+let _callSubmitBusy=false;
 window.submitCall = async function(){
+    if(_callSubmitBusy)return;
+    if(!currentNick)return toast('Войдите в аккаунт, чтобы отправить вызов','red');
+    const kind=qs('callKind')?.value==='medical'?'medical':'security';
     const name = (qs('callName')?.value||'').trim();
     const address = (qs('callAddress')?.value||'').trim();
     const desc = (qs('callDesc')?.value||'').trim();
     if(!name) return toast('⚠️ Укажите ваше имя','gold');
     if(!address) return toast('⚠️ Укажите адрес','gold');
     if(!desc) return toast('⚠️ Опишите, что произошло','gold');
-    const call = { name, address, desc, from: currentNick||null, status:'new', time: nowTime(), createdAt: Date.now() };
-    if(_callPhotoData) call.photo = _callPhotoData;
+    const btn=qs('callSubmitBtn');
+    _callSubmitBusy=true;
+    if(btn){btn.disabled=true;btn.textContent='Отправляем…';}
     try{
-        await push(ref(db,'calls'), call);
+        const {data,error}=await supabase.rpc('kp_dispatch_create',{
+            p_kind:kind,p_name:name,p_address:address,p_description:desc,
+            p_photo:_callPhotoData||null,p_request_id:crypto.randomUUID()
+        });
+        if(error)throw error;
+        if(!data?.ok)throw new Error('База не подтвердила вызов');
+        // Recipient list comes from the server, not from a possibly stale browser cache.
+        // Notification delivery is best-effort; the dispatch record is already durable.
+        void (async()=>{
+            const response=await supabase.rpc('kp_dispatch_recipients',{p_kind:kind});
+            if(response.error)throw response.error;
+            const targets=Array.isArray(response.data)?response.data:[];
+            const title=kind==='medical'?'Скорая помощь':'Вызов КСБ';
+            const notice=`${title}: ${name}, ${address}. ${desc.slice(0,160)}`;
+            const notified=await Promise.allSettled(
+                targets.filter(n=>n!==currentNick).map(n=>pushNotification(n,notice,'system'))
+            );
+            const failed=notified.filter(r=>r.status==='rejected'||r.value?.ok===false);
+            if(failed.length)console.warn('[dispatch notification]',failed.length,'уведомлений не доставлено');
+        })().catch(notifyError=>console.warn('[dispatch notification]',notifyError));
         if(qs('callDesc')) qs('callDesc').value='';
         if(qs('callAddress')) qs('callAddress').value='';
         _callPhotoData = null;
         const prev = qs('callPhotoPreview'); if(prev){ prev.style.display='none'; prev.removeAttribute('src'); }
         closeCallModal();
-        toast('✅ Вызов отправлен! КСБ и полиция уведомлены.','green');
-    }catch(err){ console.error('call error', err); toast('❌ Не удалось отправить вызов','red'); }
+        toast(kind==='medical'?'Вызов скорой помощи зарегистрирован':'Вызов КСБ и полиции зарегистрирован','green');
+    }catch(err){ console.error('call error', err); toast('Не удалось отправить вызов: '+(err.message||err),'red'); }
+    finally{_callSubmitBusy=false;if(btn){btn.disabled=false;btn.textContent='Отправить вызов';}}
 };
 // Совместимость со старыми вызовами
 window.openEmergencyNumbers = window.openCallModal;
@@ -4830,7 +4913,7 @@ window.closeInfoModal = function(){
     if(m) m.style.display = 'none';
 };
 window.showInfoTab = function(tab){
-    ['pdd','rules','reg','money'].forEach(t=>{
+    ['pdd','rules','reg'].forEach(t=>{
         const c = qs('infoTab_'+t);
         const b = qs('infoTabBtn_'+t);
         if(c) c.style.display = (t===tab) ? 'block' : 'none';

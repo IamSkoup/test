@@ -1,5 +1,35 @@
 # Kapani / Supabase — installation and verification
 
+## KSB fines and emergency dispatch — 27 October 2026
+
+The supplied site build now includes `supabase/007_duty_fines_and_emergency_calls.sql`.
+**Apply this SQL in Supabase SQL Editor before publishing the new site files.**
+The SQL is additive and does not reset existing accounts, wallets or calls.
+Existing deployments should apply **007 only**, provided 001–006 are already installed.
+
+This migration adds role-checked `kp_duty_fine` (atomic wallet debit,
+ledger history and municipal treasury credit), and protected dispatch RPCs
+for creating, listing and closing KSB/police or medical calls. It also adds
+the staff-recipient lookup and displays the issuer/reason in bank history.
+The previous browser-side `users/<other>/balance` write is removed.
+Only the assigned KSB/police staff or mayor may fine people; medics can see
+and close only medical calls. The mayor has dispatch supervision access.
+The same fine request ID can be retried safely without charging twice.
+Fines respect the site's -2500 ₽ debt limit; the RPC rejects a fine when
+it would exceed that limit, rather than creating inconsistent ledger state.
+
+Smoke-test using two authenticated test accounts after applying 007. Issue
+a KSB fine and verify the recipient balance, bank history, treasury and
+notification. Check that a normal resident cannot fine anyone or read/close
+staff calls, that medical calls appear for both a doctor and assistant, and
+that a KSB call cannot be closed by medical staff. The notification worker
+needs its normal configured push service; failed push delivery does not erase
+the durable dispatch call, which staff panels poll every 10 seconds.
+
+Local regression coverage: `node tests/duty-dispatch.test.cjs` and
+`python3 tests/validate-syntax.py`. Live multi-account tests are still
+required; these scripts cannot confirm live Supabase permissions on their own.
+
 Status on 26 October 2026: the KapaniPride project's SQL bridge, Storage bucket,
 public-name lookup, and `kapani-push` Edge Function **have been deployed**.
 The live `/health` endpoint returned `{"ok":true,"backend":"supabase","vapid":true}`.

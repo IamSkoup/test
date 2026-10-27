@@ -12,11 +12,13 @@ const ui = fs.readFileSync(path.join(root, 'assets/kapani-ui.js'), 'utf8');
 const forest = fs.readFileSync(path.join(root, 'assets/kapani-forest.css'), 'utf8');
 
 test('forest style is loaded last and ships local photographic assets', () => {
-  assert.ok(html.includes('assets/kapani-forest.css?v=1'));
+  assert.match(html,/assets\/kapani-forest\.css\?v=\d+/);
   assert.ok(html.indexOf('assets/kapani-forest.css') > html.indexOf('assets/kapani-season-themes.css'));
   assert.ok(fs.statSync(path.join(root, 'assets/forest-road.webp')).size > 10000);
   assert.ok(fs.statSync(path.join(root, 'assets/village-street.webp')).size > 10000);
-  assert.match(forest, /url\('\.\/forest-road\.webp'\)/);
+  assert.match(forest, /url\('\.\/shop-forest\.webp'\)/);
+  assert.match(forest, /url\('\.\/taxi-forest\.webp'\)/);
+  assert.match(forest, /url\('\.\/delivery-forest\.webp'\)/);
 });
 
 test('loader has a fir-tree entrance, title entrance and motion-safe fallback', () => {

@@ -1043,8 +1043,8 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
 </style>
 <link rel="stylesheet" href="redesign.css?v=3">
 <link rel="stylesheet" href="assets/kapani-season-themes.css?v=1">
-<link rel="stylesheet" href="assets/kapani-forest.css?v=1">
-<link rel="stylesheet" href="assets/kapani-forest-finishes.css?v=2">
+<link rel="stylesheet" href="assets/kapani-forest.css?v=2">
+<link rel="stylesheet" href="assets/kapani-forest-finishes.css?v=3">
 <link rel="stylesheet" href="assets/kapani-auth.css?v=1">
 <style>
 /* Smooth auth-mode transitions; the existing authentication handlers stay intact. */
@@ -1492,7 +1492,7 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
     <div class="home-help-row">
         <div><strong>Нужна помощь?</strong><small>Связь с мэрией и информация о посёлке</small></div>
         <div class="home-help-actions">
-            <button class="btn btn-red help-call-btn" onclick="openCallModal()">Вызвать помощь</button>
+            <button class="btn btn-primary help-call-btn" onclick="openCallModal()">Вызвать помощь</button>
             <button class="btn btn-ghost" onclick="openInfoModal()">О посёлке</button>
         </div>
     </div>
@@ -2320,6 +2320,11 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
         <div class="card-title">📅 Записи</div>
         <div id="hospitalPanelAppointments"><div style="color:var(--muted);font-size:13px;">Загрузка...</div></div>
     </div>
+    <div class="card" id="hospitalAmbulanceCard">
+        <div class="card-title">Скорая помощь <span id="medicalCallsBadge" class="bn-badge" style="position:static;display:none;"></span></div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Вызовы поступают врачу и помощнику врача. После оказания помощи закройте вызов.</div>
+        <div id="medicalCalls"><div style="color:var(--muted);font-size:13px;">Нет активных вызовов</div></div>
+    </div>
     <div class="card">
         <div class="card-title">🩺 Услуги</div>
         <div id="hospitalPanelServices"></div>
@@ -3141,19 +3146,24 @@ window.kapaniLoadLeaflet = (function(){
 
 <!-- EMERGENCY NUMBERS MODAL -->
 <div id="callModal" style="position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:9995;display:none;align-items:center;justify-content:center;padding:16px;" onclick="if(event.target===this)closeCallModal()">
-    <div style="width:100%;max-width:460px;background:#170b10;border:1px solid var(--border);border-radius:24px;padding:20px;box-shadow:var(--shadow);max-height:90vh;overflow-y:auto;">
+    <div class="kapani-forest-dialog" style="width:100%;max-width:460px;border:1px solid var(--border);border-radius:24px;padding:20px;box-shadow:var(--shadow);max-height:90vh;overflow-y:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-            <div style="font-size:18px;font-weight:900;">📞 Вызов КСБ / Полиции</div>
+            <div id="callModalTitle" style="font-size:18px;font-weight:900;">Вызвать помощь</div>
             <button class="btn btn-ghost btn-sm" style="width:auto;padding:8px 12px;" onclick="closeCallModal()">✕</button>
         </div>
-        <div style="font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:12px;">Опишите, что случилось. Вызов получат сотрудники КСБ и полиции.</div>
+        <div style="font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:12px;" id="callModalHint">Выберите службу, которой нужна помощь, и опишите ситуацию.</div>
+        <label for="callKind" style="display:block;font-size:12px;font-weight:800;margin-bottom:6px;">Кому отправить вызов</label>
+        <select id="callKind" onchange="updateCallModalKind()">
+            <option value="security">КСБ / Полиция</option>
+            <option value="medical">Скорая помощь</option>
+        </select>
         <input type="text" id="callName" placeholder="Ваше имя" maxlength="60">
         <input type="text" id="callAddress" placeholder="Адрес / где вы находитесь" maxlength="120" style="margin-top:8px;">
         <textarea id="callDesc" placeholder="Что произошло?" maxlength="500" rows="3" style="margin-top:8px;width:100%;resize:vertical;"></textarea>
         <label class="file-upload-btn" for="callPhotoFile" style="margin-top:8px;">📷 Прикрепить фото из галереи</label>
         <input type="file" id="callPhotoFile" accept="image/*" style="display:none;" onchange="handleCallPhoto(event)">
         <img id="callPhotoPreview" style="display:none;width:100%;border-radius:14px;margin-top:8px;max-height:220px;object-fit:cover;">
-        <button class="btn btn-red" style="margin-top:12px;" onclick="submitCall()">📞 Отправить вызов</button>
+        <button class="btn btn-primary" id="callSubmitBtn" style="margin-top:12px;" onclick="submitCall()">Отправить вызов</button>
     </div>
 </div>
 
@@ -3180,7 +3190,7 @@ window.kapaniLoadLeaflet = (function(){
 
 <!-- INFO MODAL -->
 <div id="infoModal" style="position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:9995;display:none;align-items:center;justify-content:center;padding:16px;" onclick="if(event.target===this)closeInfoModal()">
-    <div style="width:100%;max-width:460px;background:#170b10;border:1px solid var(--border);border-radius:24px;padding:20px;box-shadow:var(--shadow);max-height:85vh;display:flex;flex-direction:column;">
+    <div class="kapani-forest-dialog" style="width:100%;max-width:460px;border:1px solid var(--border);border-radius:24px;padding:20px;box-shadow:var(--shadow);max-height:85vh;display:flex;flex-direction:column;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex:none;">
             <div style="font-size:18px;font-weight:900;">ℹ️ Информация</div>
             <button class="btn btn-ghost btn-sm" style="width:auto;padding:8px 12px;" onclick="closeInfoModal()">✕</button>
@@ -3189,7 +3199,6 @@ window.kapaniLoadLeaflet = (function(){
             <button class="btn btn-primary btn-sm" id="infoTabBtn_pdd" style="flex:1;padding:10px 6px;" onclick="showInfoTab('pdd')">🚦 ПДД</button>
             <button class="btn btn-ghost btn-sm" id="infoTabBtn_rules" style="flex:1;padding:10px 6px;" onclick="showInfoTab('rules')">📜 Правила</button>
             <button class="btn btn-ghost btn-sm" id="infoTabBtn_reg" style="flex:1;padding:10px 6px;" onclick="showInfoTab('reg')">📋 Регистрация</button>
-            <button class="btn btn-ghost btn-sm" id="infoTabBtn_money" style="flex:1;padding:10px 6px;" onclick="showInfoTab('money')">💰 Деньги</button>
         </div>
         <div style="overflow-y:auto;">
             <!-- ПДД -->
@@ -3235,26 +3244,12 @@ window.kapaniLoadLeaflet = (function(){
             <!-- РЕГИСТРАЦИЯ -->
             <div id="infoTab_reg" class="info-tab-content" style="display:none;font-size:13px;line-height:1.7;color:var(--text);">
                 <p style="margin-bottom:10px;">Для <b>полной регистрации</b> вам необходимо получить <b style="color:var(--primary)">паспорт</b>, который будут проверять менты при остановке. Для этого обратитесь к <b style="color:var(--gold)">мэру</b>.</p>
-                <p style="margin-bottom:10px;">Для получения <b>водительских прав</b> (на велосипед или скутер) также стоит обратиться к мэру.</p>
+                <p style="margin-bottom:10px;">Права на велосипед можно оформить за 250 ₽. Для прав на скутер необходимо <b>оплатить экзамен за 1 500 ₽ и успешно его сдать</b>. После сдачи заявку рассматривает мэрия. Просто купить права на скутер без экзамена нельзя, а при провале деньги не возвращаются.</p>
                 <div style="background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:2px 14px;margin-bottom:10px;">
                     <div class="info-row"><span>🚲 Права на велосипед</span><b style="color:var(--primary);white-space:nowrap;">250 ₽</b></div>
-                    <div class="info-row"><span>🛵 Права на скутер</span><b style="color:var(--primary);white-space:nowrap;">1 500 ₽</b></div>
+                    <div class="info-row"><span>🛵 Экзамен на скутер</span><b style="color:var(--primary);white-space:nowrap;">1 500 ₽</b></div>
                 </div>
                 <p>Максимум ошибок на экзамене — <b style="color:var(--red)">3</b>.</p>
-            </div>
-            <!-- О ДЕНЬГАХ -->
-            <div id="infoTab_money" class="info-tab-content" style="display:none;font-size:13px;line-height:1.7;color:var(--text);">
-                <p style="margin-bottom:10px;"><b style="color:var(--gold)">Капанёвские рубли</b> — достаточно сильная валюта. За неё можно:</p>
-                <ul>
-                    <li>заказывать такси</li>
-                    <li>кататься на скутере</li>
-                    <li>покупать что-то на маркетплейсе (я нередко выставляю туда всякие чипсы или тому подобное за капанёвские рубли)</li>
-                    <li>покупать подписки</li>
-                    <li>открывать бизнесы</li>
-                    <li>покупать товары в бизнесах и так далее</li>
-                </ul>
-                <p style="margin-bottom:10px;">Заработать можно на <b>заданиях</b> и на <b>работе</b> (все зарплаты написаны).</p>
-                <div style="background:var(--gold-dim);border:1px solid rgba(255,128,106,.3);border-radius:14px;padding:12px;font-size:12px;color:var(--text);">💡 Также советуем немного переводить в наличку — если не будет интернета, вся оплата будет именно наличкой (потом её можно перевести обратно в электронные деньги).</div>
             </div>
         </div>
     </div>
