@@ -62,10 +62,10 @@ test('message delete requires confirmation', main.includes("confirm('Удали�
 test('album attachments are sent explicitly', main.includes('async function sendDraft'));
 test('history hides but does not delete', extra.includes("sessionStorage.setItem('kp_hide_delivery_history'"));
 test('licences and rental SQL last', sql.includes('014_rentals_and_access.sql'));
-test('revision 14 css loaded after v10 overrides', index.includes('assets/kapani-v10.css?v=13') &&
-  index.includes('assets/kapani-v14-fixes.css?v=14') &&
+test('revision 15 css loaded after v10 overrides', index.includes('assets/kapani-v10.css?v=13') &&
+  index.includes('assets/kapani-v14-fixes.css?v=15') &&
   index.indexOf('assets/kapani-v10.css')<index.indexOf('assets/kapani-v14-fixes.css'));
-test('revision 14 main script cache buster', index.includes('assets/kapani-main-classic.js?v=14'));
+test('revision 15 main script cache buster', index.includes('assets/kapani-main-classic.js?v=15'));
 test('revision 10 SQL appended to full installer', sql.includes('-- ===== 015_subscriptions_and_news.sql ====='));
 test('installer and individual new migration equivalent', sql.includes(subscriptionNews.trim()));
 test('Plus profile frame fix follows subscription migration', sql.includes('-- ===== 016_profile_plus_frames.sql =====') && sql.includes(profileTiers.trim()));
@@ -107,7 +107,8 @@ test('subscription never edits protected balance in active handler', main.includ
 test('success tick shown only after RPC result', main.includes('await pendingOperation;') && main.includes("if(failure){") &&
   main.includes("mark.classList.add('done')"));
 test('all payment captions present', ['Читаем данные карты','Производим оплату','Почти','Ещё чуть-чуть','Готово'].every(s => main.includes(s)));
-test('news publication uses protected RPC', main.includes("kp_news_v10',{p_action:'publish'") && subscriptionNews.includes("if p_action='publish'"));
+test('news publication uses protected RPC', main.includes("rpc('kp_news_publish_v15'") &&
+  sql.includes('function public.kp_news_publish_v15(') && subscriptionNews.includes("if p_action='publish'"));
 test('news comments use protected RPC', main.includes("p_action:'comment_send'") && subscriptionNews.includes("elsif p_action='comment_edit'"));
 test('comment author enforced server-side', subscriptionNews.includes("message->>'nick'<>a") && subscriptionNews.includes("Message author required"));
 test('read receipts protected', subscriptionNews.includes("p_action='read'") && main.includes("p_action:'read',p_news_id:id"));

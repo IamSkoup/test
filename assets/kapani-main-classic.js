@@ -2444,9 +2444,9 @@ function updateHeader(u) {
     qs('adminQuickBtn').style.display=isAdmin?'block':'none';
     const mayorHeaderBtn=qs('mayorHeaderBtn'); if(mayorHeaderBtn) mayorHeaderBtn.style.display=isAdmin?'inline-flex':'none';
     qs('workerSection').style.display=(isDriver||isDelivery||isJanitor)?'block':'none';
-    if(isDriver) qs('workerTitle').textContent='🛵 Вызовы такси';
-    if(isDelivery) qs('workerTitle').textContent='📦 Заказы на доставку';
-    if(isJanitor){ const wt=qs('workerTitle'); if(wt) wt.textContent='🧹 Уборка площадки'; }
+    if(qs('workerTaxiCard'))qs('workerTaxiCard').style.display=isDriver?'block':'none';
+    if(qs('workerDeliveryCard'))qs('workerDeliveryCard').style.display=isDelivery?'block':'none';
+    if(qs('workerJanitorCard'))qs('workerJanitorCard').style.display=isJanitor?'block':'none';
     const vBtn=qs('vehicleBtn'); if(vBtn) vBtn.style.display=(isDriver||isDelivery)?'inline-block':'none';
     // Всегда показываем кнопку Профиль (bn7)
     const profBtn=qs('bn7'); if(profBtn) profBtn.style.display='flex';
@@ -2574,7 +2574,7 @@ function updateHeader_balance(u){
     if(curPage==='bank')renderSavingsDisplay();
 }
 
-window.goToWorkerPage=function(){get(userRef(currentNick)).then(snap=>{if(!snap.exists())return;const u=snap.val();if(hasMunicipalJob(u,'Водитель'))navTo('driverPage');else if(hasMunicipalJob(u,'Доставщик'))navTo('deliveryPage');else if(hasMunicipalJob(u,JOB_JANITOR))navTo('janitorPage');});};
+window.goToWorkerPage=function(kind){get(userRef(currentNick)).then(snap=>{if(!snap.exists())return;const u=snap.val();if(kind==='delivery'&&hasMunicipalJob(u,'Доставщик'))navTo('deliveryPage');else if(kind==='taxi'&&hasMunicipalJob(u,'Водитель'))navTo('driverPage');else if(kind==='janitor'&&hasMunicipalJob(u,JOB_JANITOR))navTo('janitorPage');else if(hasMunicipalJob(u,'Водитель'))navTo('driverPage');else if(hasMunicipalJob(u,'Доставщик'))navTo('deliveryPage');else if(hasMunicipalJob(u,JOB_JANITOR))navTo('janitorPage');});};
 function updateBadge(count){const badge=qs('notifyBadge');badge.textContent=count>0?(count>9?'9+':count):'';badge.style.display=count>0?'block':'none';}
 function stopCallsListener(){
     if(!_callsListenerStarted) return;
@@ -3487,34 +3487,39 @@ function renderActiveOrders(orders) {
 
 // ─── WORKER HOME ──────────────────────────
 async function renderHomeWorker(orders){
-    const wl=qs('workerList'); if(!wl) return;
+    const taxiList=qs('workerTaxiList'),deliveryList=qs('workerDeliveryList'),janitorList=qs('workerJanitorList');
+    if(!taxiList&&!deliveryList&&!janitorList)return;
     const snap=await get(userRef(currentNick)); if(!snap.exists()) return;
     const u=snap.val();
-    if(hasMunicipalJob(u,JOB_JANITOR)){
+    if(hasMunicipalJob(u,JOB_JANITOR)&&janitorList){
         const status=u.janitorSubmissionStatus||'ready';
         const statusTxt=status==='pending'?'⏳ Отчёт в мэрии':status==='approved'?'✅ День оплачен':status==='rejected'?'❌ Отказано':'🟢 Можно выполнять';
-        wl.innerHTML=`<div class="work-order work-active"><div style="color:var(--primary);font-size:11px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Ежедневная задача</div><div style="font-weight:700;font-size:15px;margin-bottom:4px;">🧹 ${JANITOR_TASK_TEXT}</div><div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Сегодня: ${todayKey()}</div><div style="font-size:12px;color:var(--muted);">${statusTxt}</div><div style="display:flex;gap:8px;margin-top:10px;"><button class="btn btn-primary btn-sm" onclick="navTo('janitorPage')">Открыть →</button></div></div>`;
-        return;
+        janitorList.innerHTML=`<div class="work-order work-active"><div style="color:var(--primary);font-size:11px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Ежедневная задача</div><div style="font-weight:700;font-size:15px;margin-bottom:4px;">🧹 ${JANITOR_TASK_TEXT}</div><div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Сегодня: ${todayKey()}</div><div style="font-size:12px;color:var(--muted);">${statusTxt}</div></div>`;
     }
     const ordersArr=Object.entries(orders).map(([id,o])=>({...o,id}));
-    const active=ordersArr.find(o=>o.worker===currentNick&&((o.type==='taxi'&&DRIVER_ACTIVE_ORDER_STATUSES.has(String(o.status||'')))||(o.type!=='taxi'&&o.status==='in_progress')));
-    if(active){wl.innerHTML=`<div class="work-order work-active"><div style="color:var(--primary);font-size:11px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Активный заказ</div><div style="font-weight:700;font-size:15px;margin-bottom:4px;">${escHtml(active.info)}</div>${active.address?`<div style="color:var(--muted);font-size:12px;">📍 ${escHtml(active.address)}</div>`:''}<div style="color:var(--muted);font-size:12px;margin-top:4px;">Клиент: ${active.client} · ${active.price}₽</div></div>`;}
-    else{const type=hasMunicipalJob(u,'Водитель')?'taxi':'shop';const avail=ordersArr.filter(o=>o.type===type&&((type==='taxi'&&['pending','waiting'].includes(String(o.status||'')))||(type!=='taxi'&&o.status==='waiting')));wl.innerHTML=avail.length===0?'<div style="color:var(--muted);font-size:13px;text-align:center;padding:16px 0;">Нет заказов</div>':avail.map(o=>`<div class="work-order" style="margin-bottom:10px;"><div style="font-weight:700;margin-bottom:6px;">${escHtml(o.info)}</div>${o.address?`<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">📍 ${escHtml(o.address)}</div>`:''}<div style="display:flex;justify-content:space-between;align-items:center;"><span style="color:var(--primary);font-weight:900;">${o.price}₽</span><button class="btn btn-primary btn-sm" onclick="takeOrder('${o.id}')">✅ Взять</button></div></div>`).join('');}
+    for(const [type,el,role] of [['taxi',taxiList,'Водитель'],['shop',deliveryList,'Доставщик']]){
+        if(!el||!hasMunicipalJob(u,role))continue;
+        const active=ordersArr.find(o=>o.worker===currentNick&&o.type===type&&(type==='taxi'?DRIVER_ACTIVE_ORDER_STATUSES.has(String(o.status||'')):o.status==='in_progress'));
+        if(active){el.innerHTML=`<div class="work-order work-active"><div style="color:var(--primary);font-size:11px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Активный заказ</div><div style="font-weight:700;font-size:15px;margin-bottom:4px;">${escHtml(active.info)}</div>${active.address?`<div style="color:var(--muted);font-size:12px;">📍 ${escHtml(active.address)}</div>`:''}<div style="color:var(--muted);font-size:12px;margin-top:4px;">Клиент: ${escHtml(active.client)} · ${active.price}₽</div></div>`;continue;}
+        const avail=ordersArr.filter(o=>o.type===type&&(type==='taxi'?['pending','waiting'].includes(String(o.status||'')):o.status==='waiting'));
+        el.innerHTML=avail.length===0?'<div style="color:var(--muted);font-size:13px;text-align:center;padding:16px 0;">Нет заказов</div>':avail.map(o=>`<div class="work-order" style="margin-bottom:10px;"><div style="font-weight:700;margin-bottom:6px;">${escHtml(o.info)}</div>${o.address?`<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">📍 ${escHtml(o.address)}</div>`:''}<div style="display:flex;justify-content:space-between;align-items:center;"><span style="color:var(--primary);font-weight:900;">${o.price}₽</span><button class="btn btn-primary btn-sm" onclick="takeOrder('${o.id}')">✅ Взять</button></div></div>`).join('');
+    }
 }
 
 // ─── WORKER PAGES ─────────────────────────
 async function renderWorkerPage(orders){
     const snap=await get(userRef(currentNick)); if(!snap.exists()) return;
-    const u=snap.val(); const isDriver=hasMunicipalJob(u,'Водитель');
+    const u=snap.val(); const isDriver=curPage==='driverPage';
+    if(!hasMunicipalJob(u,isDriver?'Водитель':'Доставщик'))return;
     const type=isDriver?'taxi':'shop'; const listId=isDriver?'driverList':'deliveryList';
     const el=qs(listId); if(!el) return;
     if(!orders){const oSnap=await get(ordersRef());orders=oSnap.val()||{};}
     const ordersArr=Object.entries(orders).map(([id,o])=>({...o,id}));
-    const active=ordersArr.find(o=>o.worker===currentNick&&((o.type==='taxi'&&DRIVER_ACTIVE_ORDER_STATUSES.has(String(o.status||'')))||(o.type!=='taxi'&&o.status==='in_progress')));
+    const active=ordersArr.find(o=>o.worker===currentNick&&o.type===type&&(isDriver?DRIVER_ACTIVE_ORDER_STATUSES.has(String(o.status||'')):o.status==='in_progress'));
     if(active){
         const stableDriverKey=[active.id,active.status,active.info||'',active.client||'',active.price||0,active.clientLat||'',active.clientLng||'',active.destLat||'',active.destLng||'',active.driverVehicle||'',active.driverAvatar||''].join('|');
-        if(_driverUiKey===stableDriverKey) return;
-        _driverUiKey=stableDriverKey;
+        if(_driverUiKey===type+'|'+stableDriverKey) return;
+        _driverUiKey=type+'|'+stableDriverKey;
         const driverAction=active.status==='accepted'?`<button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="startSharingLocation()">📍 Начать движение</button>`:active.status==='driver_arriving'?`<button class="btn btn-gold btn-sm" style="margin-top:8px;" onclick="beginTaxiTrip('${active.id}')">🚕 Клиент найден — начать поездку</button>`:active.status==='in_progress'?`<button class="btn btn-gold btn-sm" style="margin-top:8px;" onclick="finishTaxiTrip('${active.id}')">🏁 Завершить поездку</button>`:'';
         el.innerHTML=`<div class="work-order work-active"><div style="color:var(--primary);font-size:11px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">🟢 Активный заказ</div><div style="font-weight:700;font-size:15px;margin-bottom:4px;">${escHtml(active.info)}</div>${active.address?`<div style="color:var(--muted);font-size:13px;margin-bottom:8px;">📍 ${escHtml(active.address)}</div>`:''}<div style="color:var(--muted);font-size:13px;margin-bottom:8px;">Клиент: <b style="color:var(--text)">${escHtml(active.client)}</b> · ${active.price}₽</div>${isDriver&&active.type==='taxi'?`<div style="font-size:13px;color:var(--primary);font-weight:900;margin-bottom:12px;">🛵 ${escHtml(active.driverVehicle||u.vehicle||'Транспорт не указан')}</div>`:''}<button class="btn btn-ghost" style="color:var(--red);border-color:var(--red-dim);font-size:12px;" onclick="abandonOrder('${active.id}')">⚠️ Отказаться (−35₽)</button>${driverAction}</div>`;
         const clientUser=allUsersCache[active.client]||{};const clientOnline=isUserOnline(clientUser);
@@ -5211,7 +5216,11 @@ async function sendChatMsg(text,mediaData,msgType,cameraFacing){
 
 // ─── DM MESSENGER ─────────────────────────
 function localDateKey(ts){ return new Date(ts || Date.now()).toLocaleDateString('sv-SE'); }
-function getPinnedMap(){ return (allUsersCache[currentNick] && allUsersCache[currentNick].pinnedChats) || myPinnedChats || {}; }
+function getPinnedMap(){
+    const user=allUsersCache[currentNick]||{};
+    const saved=user.settings?.pinnedChats;
+    return (saved&&typeof saved==='object'&&!Array.isArray(saved)?saved:null)||user.pinnedChats||myPinnedChats||{};
+}
 function isChatPinned(nick){ return !!getPinnedMap()[nick]; }
 function dmPreviewText(msg){
     if(!msg) return 'Новый чат';
@@ -5342,18 +5351,26 @@ window.openPinnedDmChat = function(nick){
 };
 window.togglePinChat = async function(nick){
     if(!currentNick || !nick || nick === currentNick) return;
+    const previous={...getPinnedMap()};
     const cur = { ...getPinnedMap() };
     const willPin = !cur[nick];
     if(willPin) cur[nick] = Date.now(); else delete cur[nick];
     myPinnedChats = cur;
     try{
-        await update(userRef(currentNick), { pinnedChats: cur });
+        // Direct pinnedChats writes are forbidden by the protected profile API.
+        // Save private chat preferences inside the editable settings object.
+        const settings={...(allUsersCache[currentNick]?.settings||{}),pinnedChats:cur};
+        await patchOwnProfile({settings});
+        if(allUsersCache[currentNick])allUsersCache[currentNick].settings=settings;
         toast(willPin ? '📌 Чат закреплён' : '📍 Чат откреплён', 'green');
         if(curPage === 'messages' && document.querySelector('#msgPanel1.active')){
              renderDmUserList(allUsersCache);
          }
     }catch(e){
-        toast('❌ Не удалось сохранить закрепление','red');
+        myPinnedChats=previous;
+        if(curPage==='messages')renderDmUserList(allUsersCache);
+        console.error('[Kapani chat pin]',e);
+        toast('Не удалось сохранить закрепление: '+(e?.message||'ошибка сервера'),'red');
     }
 };
 window.switchMsgTab=function(i){
@@ -6355,7 +6372,12 @@ window.publishListing=async function(){
     const cat=qs('mktCategory').value;
     const price=cat==='work' ? 0 : (negotiable?0:(parseInt(qs('mktPrice').value)||0));
     const salaryHint=(qs('mktSalaryHint')?.value||'').trim();
-    if(!title)return toast('⚠️ Название','gold');
+    const desc=qs('mktDesc').value.trim();
+    if(title.length<2||title.length>120)return toast('Название объявления должно содержать от 2 до 120 символов','gold');
+    if(desc.length>2000)return toast('Описание объявления слишком длинное (максимум 2000 символов)','gold');
+    if(!['other','food','tools','clothes','electronics','building','work','service'].includes(cat))return toast('Выберите категорию объявления','gold');
+    if(!Number.isSafeInteger(price)||price<0||price>9999999)return toast('Цена должна быть целым числом от 0 до 9 999 999 ₽','gold');
+    if(salaryHint.length>160)return toast('Сократите описание оплаты до 160 символов','gold');
     if(cat!=='work' && !negotiable && price<=0)return toast('⚠️ Укажите цену или отметьте «договорная»','gold');
     if(cat==='work' && !salaryHint)return toast('⚠️ Для вакансии укажите оплату','gold');
     
@@ -6391,8 +6413,9 @@ window.publishListing=async function(){
     }
     
     const photo=window._mktPhotoData||qs('mktPhoto').value.trim();
+    if(photo.length>2500000)return toast('Фото превышает допустимый размер. Прикрепите сжатое изображение.','gold');
     const id=genId();
-    if(!await marketMutation('create',id,{title,desc:qs('mktDesc').value.trim(),
+    if(!await marketMutation('create',id,{title,desc,
         price,priceNegotiable:cat!=='work' && !!negotiable,salaryHint,photo,category:cat,...window.kpListingExtras?.()})) return;
     if(!u.rewardedListing){
         const {data,error}=await supabase.rpc('kp_claim_migrated_once',{p_task_id:'rewardedListing'});
@@ -6412,7 +6435,7 @@ async function marketMutation(action,id,payload={}){
         return data;
     }catch(e){
         console.error('[Kapani market '+action+']',e);
-        toast('❌ Маркет: '+(e?.message||'Ошибка сервера'),'red');
+        toast('Маркетплейс: '+(e?.message==='Invalid listing details'?'Проверьте название (2–120 символов), описание (до 2000), категорию и размер фото':(e?.message||'Ошибка сервера')),'red');
         return null;
     }
 }
@@ -6634,7 +6657,7 @@ window.renderJobAppStatus=async function(){
     
     if(!myApp){
         statusEl.innerHTML='';
-        if(qs('jAppText')) { qs('jAppText').value=''; qs('jAppText').disabled=false; }
+        if(qs('jAppText'))qs('jAppText').disabled=false;
         return;
     }
     
@@ -6645,7 +6668,9 @@ window.renderJobAppStatus=async function(){
         qs('jAppText').disabled=true;
     } else if(myApp.status==='approved'){
         statusHTML=`<div class="status-card green" style="margin-top:12px;"><div class="status-badge badge-active"><span class="pulse"></span>Заявка одобрена</div><div style="font-weight:700;">✅ Вы приняты на работу "${myApp.target}"</div>${myApp.appText?`<div style="font-size:13px;color:var(--muted);margin:8px 0;">${escHtml(myApp.appText)}</div>`:''}<div style="font-size:12px;color:var(--muted);">Можете приступать к работе</div></div>`;
-        qs('jAppText').disabled=true;
+        // An approved application must not prevent applying for a second job.
+        qs('jAppText').disabled=false;
+        if(qs('jAppText').value===(myApp.appText||''))qs('jAppText').value='';
     } else if(myApp.status==='rejected'){
         statusHTML=`<div class="status-card" style="margin-top:12px;border-color:var(--red);background:rgba(248,113,113,.08);"><div style="color:var(--red);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">❌ Заявка отклонена</div><div style="font-weight:700;margin-bottom:4px;">📝 Заявка на "${myApp.target}"</div>${myApp.appText?`<div style="font-size:13px;color:var(--muted);margin:8px 0;">${escHtml(myApp.appText)}</div>`:''}<div style="font-size:12px;color:var(--muted);">Попробуйте подать заявку позже</div></div>`;
         qs('jAppText').disabled=false;
@@ -7426,21 +7451,38 @@ window.switchNewsTab = function(tab){
 };
 
 window.canPublishNews = canPublishNews;
+window._newsImagesV15=window._newsImagesV15||[];
+let newsImageUploadBusy=false;
+function renderNewsImageDraft(){
+    const host=qs('newsImagePreview');if(!host)return;
+    const images=window._newsImagesV15||[];
+    host.style.display=images.length?'block':'none';
+    host.innerHTML=images.length?`<div class="v8-thumb-grid">${images.map((url,i)=>`<div style="position:relative;"><img src="${escHtml(url)}" alt="Фото ${i+1}" loading="lazy"><button type="button" onclick="removeNewsImage(${i})" aria-label="Удалить фото ${i+1}" style="position:absolute;top:4px;right:4px;z-index:2;">×</button></div>`).join('')}</div>`:'';
+}
+window.removeNewsImage=i=>{if(!Number.isInteger(i)||i<0||i>=window._newsImagesV15.length)return;window._newsImagesV15.splice(i,1);renderNewsImageDraft();};
+window.removeNewsImageUrl=()=>{if(qs('newsImage'))qs('newsImage').value='';};
 window.handleNewsPhoto = async function(e){
-    const file = e.target.files[0];
-    if(!file) return;
+    const files=Array.from(e.target.files||[]);
+    e.target.value='';
+    if(!files.length)return;
+    if(newsImageUploadBusy)return toast('Дождитесь загрузки предыдущих фото','gold');
+    if(window._newsImagesV15.length+files.length>8)return toast('Можно прикрепить максимум 8 фотографий','gold');
+    newsImageUploadBusy=true;
     try {
-        toast('📷 Сжимаем фото...', 'gold');
-        const dataUrl = await compressImage(file, 1200, 0.85);
-        const img = qs('newsImageImg');
-        img.src = dataUrl;
-        img.parentElement.style.display = 'block';
-        // Store in hidden input
-        window._newsPhotoData = dataUrl;
+        for(const file of files){
+            if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>10*1024*1024)throw new Error('Принимаются JPG, PNG и WebP до 10 МБ');
+            const compressed=await compressImage(file,1400,0.84);
+            const url=await uploadBlobToStorage(await(await fetch(compressed)).blob(),'news/images');
+            window._newsImagesV15.push(url);
+            renderNewsImageDraft();
+        }
+        toast('Фотографии прикреплены','green');
     } catch(err) {
-        toast('❌ Не удалось загрузить фото', 'red');
+        console.error('[Kapani news images]',err);
+        toast('Не удалось загрузить фото: '+(err?.message||'ошибка'),'red');
+    }finally{
+        newsImageUploadBusy=false;
     }
-    e.target.value = '';
 };
 
 window.handleNewsVideo = async function(e){
@@ -7544,6 +7586,12 @@ window.loadMoreNews = function(scope){
     _newsRenderLimit[scope] = (_newsRenderLimit[scope]||10) + 10;
     renderNews();
 };
+function newsGalleryHtml(item,maxHeight=200){
+    const images=Array.isArray(item?.images)&&item.images.length?item.images:(item?.imageUrl?[item.imageUrl]:[]);
+    const valid=images.filter(url=>typeof url==='string'&&/^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,)/.test(url)).slice(0,8);
+    if(!valid.length)return '';
+    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:8px;margin-bottom:10px;">${valid.map((url,i)=>`<img loading="lazy" decoding="async" src="${escHtml(url)}" alt="Фото ${i+1}" style="width:100%;height:auto;max-height:${maxHeight}px;min-height:110px;object-fit:cover;border-radius:var(--r-sm);cursor:pointer;" onclick="openImgViewer('${jsEsc(url)}')">`).join('')}</div>`;
+}
 window.renderNews = async function(){
     const editorPanel = qs('newsEditorPanel');
     const scopeSel = qs('newsScope');
@@ -7585,7 +7633,7 @@ window.renderNews = async function(){
                         ${canDelete ? `<button class="btn btn-ghost btn-sm" style="margin-left:auto;color:var(--red);" onclick="deleteNews('${jsEsc(item.id)}')">🗑</button>` : `<div style="margin-left:auto;"></div>`}
                     </div>
                     <div class="news-user-text" style="font-weight:900;font-size:15px;margin-bottom:8px;">${escHtml(item.title)}</div>
-                    ${item.imageUrl ? `<img loading="lazy" decoding="async" src="${escHtml(item.imageUrl)}" style="width:100%;max-height:200px;object-fit:cover;border-radius:var(--r-sm);margin-bottom:10px;cursor:pointer;" onclick="openImgViewer('${jsEsc(item.imageUrl)}')">` : ''}
+                    ${newsGalleryHtml(item,200)}
                     ${item.videoUrl ? `<div style="margin-bottom:10px;cursor:pointer;" onclick="openVideoViewer('${jsEsc(item.videoUrl)}')"><video style="width:100%;max-height:220px;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--border);background:#000;" muted playsinline preload="metadata"><source src="${escHtml(item.videoUrl)}#t=0.1"></video></div>` : ''}
                     <div class="news-user-text" style="font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${escHtml(item.content)}</div>
                     <div style="margin-top:10px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -7627,7 +7675,7 @@ window.openNewsDiscussion = async function(id){
                 <span class="news-scope-badge">${escHtml(item.date || '')} · ${escHtml(item.time || '')}</span>
             </div>
             <div class="news-user-text" style="font-weight:900;font-size:18px;margin:10px 0 8px;">${escHtml(item.title || '')}</div>
-            ${item.imageUrl ? `<img loading="lazy" decoding="async" src="${escHtml(item.imageUrl)}" style="width:100%;max-height:240px;object-fit:cover;border-radius:var(--r-sm);margin-bottom:10px;cursor:pointer;" onclick="openImgViewer('${jsEsc(item.imageUrl)}')">` : ''}
+            ${newsGalleryHtml(item,240)}
             ${item.videoUrl ? `<div style="margin-bottom:10px;cursor:pointer;" onclick="openVideoViewer('${jsEsc(item.videoUrl)}')"><video style="width:100%;max-height:260px;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--border);background:#000;" muted playsinline preload="metadata"><source src="${escHtml(item.videoUrl)}#t=0.1"></video></div>` : ''}
             <div class="news-user-text" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word;">${escHtml(item.content || '')}</div>
             <div style="margin-top:10px;font-size:11px;color:var(--muted);">
@@ -14462,7 +14510,7 @@ document.querySelectorAll('[onclick*="toggleEmoji"]').forEach(el=>{el.textConten
 document.querySelectorAll('[onclick*="toggleMediaBar"]').forEach(el=>{el.textContent='📎';el.setAttribute('aria-label','Прикрепить файлы');});
 ['chat','dm'].forEach(kind=>{const input=qs(kind==='dm'?'dmInput':'chatInput');if(input){input.maxLength=4000;input.setAttribute('enterkeyhint','send');}pendingHost(kind);});
 
-window.submitBizApply=()=>action('biz-apply',async()=>{const data={name:qs('bapName')?.value.trim(),desc:qs('bapDesc')?.value.trim(),address:qs('bapAddress')?.value.trim(),category:qs('bapCategory')?.value,services:qs('bapServices')?.value.trim(),lat:qs('bapLat')?.value,lng:qs('bapLng')?.value};if(!point(data.lat,data.lng))throw new Error('Выберите точку бизнеса на карте');const key='biz:'+JSON.stringify(data);await rpc('kp_business_application_v8',{p_action:'submit',p_id:requestID(key),p_data:data});v8.requests.delete(key);closeBizApplyModal();toast('Заявка отправлена в мэрию. Пошлина 2 500 ₽ зарезервирована.','green');void pushNotification(ADMIN,`Заявка на бизнес: ${currentNick} — ${data.name}`,'system').catch(console.warn);});
+window.submitBizApply=()=>action('biz-apply',async()=>{const data={name:qs('bapName')?.value.trim(),desc:qs('bapDesc')?.value.trim(),address:qs('bapAddress')?.value.trim(),category:qs('bapCategory')?.value,services:qs('bapServices')?.value.trim(),lat:qs('bapLat')?.value,lng:qs('bapLng')?.value};if(data.name.length<2||data.name.length>80)throw new Error('Название бизнеса должно содержать от 2 до 80 символов');if(data.desc.length<5||data.desc.length>2000)throw new Error('Описание бизнеса должно содержать от 5 до 2000 символов');if(!point(data.lat,data.lng))throw new Error('Выберите точку бизнеса на карте');const key='biz:'+JSON.stringify(data);await rpc('kp_business_application_v8',{p_action:'submit',p_id:requestID(key),p_data:data});v8.requests.delete(key);closeBizApplyModal();toast('Заявка отправлена в мэрию. Пошлина зарезервирована.','green');void pushNotification(ADMIN,`Заявка на бизнес: ${currentNick} — ${data.name}`,'system').catch(console.warn);});
 window.adminApproveBiz=id=>action('biz-review:'+id,async()=>{const data=await rpc('kp_business_application_v8',{p_action:'approve',p_id:id});if(_adminBizAppsCache)_adminBizAppsCache[id]=data;await renderAdminBizApps();void pushNotification(data.owner,`Бизнес «${data.name}» одобрен`,'system').catch(console.warn);});
 window.adminRejectBiz=id=>action('biz-review:'+id,async()=>{const data=await rpc('kp_business_application_v8',{p_action:'reject',p_id:id});if(_adminBizAppsCache)_adminBizAppsCache[id]=data;await renderAdminBizApps();void pushNotification(data.owner,'Заявка на бизнес отклонена. Пошлина возвращена.','system').catch(console.warn);});
 
@@ -14612,12 +14660,17 @@ window.publishNews=()=>action('v10-news-publish',async()=>{
   const scope=qs('newsScope')?.value||currentNewsTab;
   if(!canPublishNews(scope))throw new Error('Нет прав на публикацию новостей');
   const title=qs('newsTitle')?.value.trim(),content=qs('newsContent')?.value.trim();
-  if(!title||!content)throw new Error('Заполните заголовок и текст');
+  if(title.length<2||title.length>100)throw new Error('Заголовок новости должен содержать от 2 до 100 символов');
+  if(content.length<2||content.length>10000)throw new Error('Текст новости должен содержать от 2 до 10 000 символов');
+  if(newsImageUploadBusy)throw new Error('Дождитесь окончания загрузки фотографий');
+  const manualImage=qs('newsImage')?.value.trim()||'';
+  if(manualImage&&!/^https:\/\//i.test(manualImage))throw new Error('Ссылка на изображение должна начинаться с https://');
+  const images=[...window._newsImagesV15,...(manualImage?[manualImage]:[])];
+  if(images.length>8)throw new Error('К новости можно прикрепить не больше 8 фотографий');
   const data={scope,title,content,category:qs('newsCategory')?.value||'general',
-    imageUrl:window._newsPhotoData||qs('newsImage')?.value.trim()||null,
-    videoUrl:window._newsVideoUrl||null};
+    imageUrl:images[0]||null,images,videoUrl:window._newsVideoUrl||null};
   const key='news-publish:'+JSON.stringify([scope,title,content]);
-  const news=await rpc('kp_news_v10',{p_action:'publish',p_news_id:requestID(key),p_message_id:null,p_data:data});
+  const news=await rpc('kp_news_publish_v15',{p_news_id:requestID(key),p_data:data});
   v8.requests.delete(key);
   void enqueuePushJob({type:'news',id:String(news.id),sender:currentNick});
   void notifyAllUsersOfNews(news).catch(console.warn);
@@ -14625,7 +14678,7 @@ window.publishNews=()=>action('v10-news-publish',async()=>{
   if(qs('newsContent'))qs('newsContent').value='';
   if(qs('newsImage'))qs('newsImage').value='';
   window._newsPhotoData=null;window._newsVideoUrl=null;
-  if(qs('newsImagePreview'))qs('newsImagePreview').style.display='none';
+  window._newsImagesV15=[];renderNewsImageDraft();
   if(qs('newsVideoPreview'))qs('newsVideoPreview').style.display='none';
   await window.renderNews();toast('Новость опубликована','green');
 });

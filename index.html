@@ -1209,7 +1209,7 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
 <link rel="stylesheet" href="assets/kapani-v8.css?v=8">
 <link rel="stylesheet" href="assets/kapani-finishes.css?v=9">
 <link rel="stylesheet" href="assets/kapani-v10.css?v=13">
-<link rel="stylesheet" href="assets/kapani-v14-fixes.css?v=14">
+<link rel="stylesheet" href="assets/kapani-v14-fixes.css?v=15">
 </head>
 <body>
 
@@ -1465,12 +1465,26 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
     </div>
     <div id="homeOrders"></div>
     <div id="workerSection" style="display:none">
-        <div class="card">
+        <div class="card" id="workerTaxiCard" style="display:none">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <div class="card-title" id="workerTitle" style="margin-bottom:0;">Заказы</div>
-                <button class="btn btn-primary btn-sm" id="workerPageBtn" onclick="goToWorkerPage()">Открыть →</button>
+                <div class="card-title" style="margin-bottom:0;">🛵 Вызовы такси</div>
+                <button class="btn btn-primary btn-sm" onclick="goToWorkerPage('taxi')">Открыть →</button>
             </div>
-            <div id="workerList"></div>
+            <div id="workerTaxiList"></div>
+        </div>
+        <div class="card" id="workerDeliveryCard" style="display:none">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <div class="card-title" style="margin-bottom:0;">📦 Заказы на доставку</div>
+                <button class="btn btn-primary btn-sm" onclick="goToWorkerPage('delivery')">Открыть →</button>
+            </div>
+            <div id="workerDeliveryList"></div>
+        </div>
+        <div class="card" id="workerJanitorCard" style="display:none">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <div class="card-title" style="margin-bottom:0;">🧹 Уборка площадки</div>
+                <button class="btn btn-primary btn-sm" onclick="goToWorkerPage('janitor')">Открыть →</button>
+            </div>
+            <div id="workerJanitorList"></div>
         </div>
     </div>
     <div id="bizOrderSection" style="display:none;margin-bottom:14px;">
@@ -2075,12 +2089,13 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
             <option value="village">🏘️ Новости посёлка</option>
             <option value="lands">🌲 Новости Капанёвских земель</option>
         </select>
-        <input type="text" id="newsTitle" placeholder="Заголовок новости" maxlength="100">
-        <textarea id="newsContent" placeholder="Текст новости..." style="min-height:120px;"></textarea>
+        <input type="text" id="newsTitle" placeholder="Заголовок новости (2–100 символов)" minlength="2" maxlength="100">
+        <textarea id="newsContent" placeholder="Текст новости (2–10000 символов)..." minlength="2" maxlength="10000" style="min-height:120px;"></textarea>
         <input type="url" id="newsImage" placeholder="URL изображения (необязательно)">
-        <label class="file-upload-btn" for="newsImageFile">📷 Выбрать фото</label>
-        <input type="file" id="newsImageFile" accept="image/*" onchange="handleNewsPhoto(event)">
-        <div id="newsImagePreview" style="display:none;margin-bottom:8px;"><img id="newsImageImg" style="width:100%;max-height:140px;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--border);"></div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="removeNewsImageUrl()" style="margin:4px 0 10px;">Убрать изображение по ссылке</button>
+        <label class="file-upload-btn" for="newsImageFile">📷 Выбрать фото (до 8)</label>
+        <input type="file" id="newsImageFile" accept="image/jpeg,image/png,image/webp" multiple onchange="handleNewsPhoto(event)">
+        <div id="newsImagePreview" style="display:none;margin-bottom:8px;"></div>
         <label class="file-upload-btn" for="newsVideoFile">🎬 Выбрать видео</label>
         <input type="file" id="newsVideoFile" accept="video/*" onchange="handleNewsVideo(event)">
         <div id="newsVideoPreview" style="display:none;margin-bottom:8px;">
@@ -2760,7 +2775,7 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
         </div>
         <div style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.5;">Заполните анкету. Заявка отправится в мэрию на рассмотрение. Госпошлина за создание бизнеса — <span id="bizFeeDisplay">2500 ₽</span>. С подпиской Ultra — 2000 ₽, с Kapani Prime — 1250 ₽.</div>
         <input type="text" id="bapName" placeholder="Название бизнеса" maxlength="60">
-        <textarea id="bapDesc" placeholder="Описание бизнеса" style="min-height:72px;"></textarea>
+        <textarea id="bapDesc" placeholder="Описание бизнеса (от 5 символов)" minlength="5" maxlength="2000" style="min-height:72px;"></textarea>
         <div style="font-size:12px;color:var(--muted);margin:4px 0 6px;">📍 Местоположение бизнеса выбирается на карте. Текстовый адрес можно уточнить автоматически.</div>
         <input type="text" id="bapAddress" placeholder="Адрес / описание точки" maxlength="120">
         <input type="hidden" id="bapLat"><input type="hidden" id="bapLng">
@@ -2825,7 +2840,7 @@ window.kapaniLoadLeaflet = (function(){
 <script src="./functions/subscription-config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8" defer></script>
 <script src="./assets/supabase-bridge-classic.js" defer></script>
-<script src="./assets/kapani-main-classic.js?v=14" defer></script>
+<script src="./assets/kapani-main-classic.js?v=15" defer></script>
 
 <script>
 // ═══════════════════════════════════════════════════
