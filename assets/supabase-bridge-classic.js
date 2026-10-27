@@ -116,7 +116,12 @@ async function get(reference) {
 }
 
 async function mutate(operation, reference, value, expected = null) {
-  const result = await treeCall(operation, reference, value, expected);
+  const branch=branchOf(reference.path);
+  let result;
+  if(['businesses','races','raceDayGroups','rentBuildings','janitorSubmissions','deputyProposals','atmRequests','bizDeleteRequests','bizComplaints'].includes(branch) || (branch==='hospital' && /^hospital\/(services|photos|assistantSalary)(\/|$)/.test(reference.path))){
+    const response=await supabase.rpc('kp_content_v8',{p_operation:operation,p_path:reference.path,p_payload:value??null});
+    if(response.error)throw new Error(response.error.message);result=response.data||{};
+  }else result = await treeCall(operation, reference, value, expected);
   if (result.conflict) return result;
   notifyLocal(branchOf(reference.path));
   return result;

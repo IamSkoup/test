@@ -102,7 +102,7 @@
   }
   const emojiPattern = /[\p{Extended_Pictographic}\u20e3]/u;
   const segmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter('ru', {granularity:'grapheme'}) : null;
-  const skipSelector = '#wallEmojiPanel,#nicknameEmojiSelect,#abnGrid,.msg-text,.msg-caption,.news-user-text,.chat-sender,.dm-user-name,.lb-name,.h-name';
+  const skipSelector = '.v8-emoji-grid,.v8-reaction-picker,.v8-reactions,[onclick*="toggleEmoji"],[onclick*="toggleMediaBar"],#wallEmojiPanel,#nicknameEmojiSelect,#abnGrid,.msg-text,.msg-caption,.news-user-text,.chat-sender,.dm-user-name,.lb-name,.h-name';
   function isUserContent(parent) {
     if (parent.closest(skipSelector)) return true;
     if (parent.closest('#slotsArea,#blackjackArea,#baccaratArea,#videoPokerArea,#rouletteArea,#coinflipArea,#diceArea') && !parent.closest('button,.card-title')) return true;

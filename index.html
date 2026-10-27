@@ -1206,47 +1206,11 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
     #authSection .auth-card #authForm { animation: none !important; }
 }
 </style>
+<link rel="stylesheet" href="assets/kapani-v8.css?v=8">
 </head>
 <body>
 
-<!-- ONE-TIME PROJECT STATUS NOTICE -->
-<div id="kapaniShutdownNotice" hidden role="dialog" aria-modal="true" aria-labelledby="kapaniShutdownTitle" aria-describedby="kapaniShutdownText">
-    <div class="kapani-shutdown-card">
-        <div class="kapani-shutdown-kicker">Статус проекта</div>
-        <h1 class="kapani-shutdown-title" id="kapaniShutdownTitle">КАПАНИ БОЛЬШЕ НЕ РАБОТАЮТ</h1>
-        <div class="kapani-shutdown-text" id="kapaniShutdownText">
-            <p>Я принял решение немного забыть о сайте. Теперь я, то есть администратор, больше не контролирую сайт и не выдаю зарплаты, и сайт не будет обновляться, хотя тут много недочётов.</p>
-            <p>Навсегда это или нет — неизвестно. Возможно, вернусь, и сделаю что-то маштабное.</p>
-            <p>Сейчас сайт всё ещё доступен, можно играть в казино, сайт весь доступен, но помните: <strong>он не поддерживается, и фактически он брошен.</strong></p>
-        </div>
-        <button type="button" id="kapaniShutdownAccept">Понятно</button>
-    </div>
-</div>
-<script>
-(function(){
-    var storageKey='kapani_shutdown_notice_seen_v1';
-    var notice=document.getElementById('kapaniShutdownNotice');
-    var accept=document.getElementById('kapaniShutdownAccept');
-    if(!notice || !accept) return;
 
-    var alreadySeen=false;
-    try{ alreadySeen=localStorage.getItem(storageKey)==='1'; }catch(e){}
-
-    if(!alreadySeen){
-        notice.hidden=false;
-        document.body.classList.add('kapani-shutdown-notice-open');
-        requestAnimationFrame(function(){ try{ accept.focus({preventScroll:true}); }catch(e){ accept.focus(); } });
-    }
-
-    function dismissNotice(){
-        try{ localStorage.setItem(storageKey,'1'); }catch(e){}
-        notice.hidden=true;
-        document.body.classList.remove('kapani-shutdown-notice-open');
-    }
-
-    accept.addEventListener('click',dismissNotice);
-})();
-</script>
 
 
 <div id="frozenOverlay"><div style="font-size:48px;margin-bottom:12px;">🧊</div><div style="font-weight:900;font-size:18px;margin-bottom:8px;">Аккаунт заморожен</div><div style="color:var(--muted);font-size:14px;max-width:320px;line-height:1.5;">Баланс ниже допустимого лимита. Попросите перевод или отработайте, чтобы мэрия пополнила счёт.</div></div>
@@ -1475,7 +1439,7 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
     </div>
     <div class="home-label"><span>Сервисы посёлка</span><small>Выбирай, куда отправиться</small></div>
     <div class="quick-grid">
-        <div class="quick-card" onclick="navTo('shop')" role="button" tabindex="0" aria-label="Перейти в магазин"><div class="qico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18l-2 13H5z M8 7V5a4 4 0 0 1 8 0v2"/></svg></div><div class="qlbl">Магазин</div><div class="qsub">Ресурсы поселка</div></div>
+        <div class="quick-card" onclick="navTo('jobs')" role="button" tabindex="0" aria-label="Перейти в магазин"><div class="qico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18l-2 13H5z M8 7V5a4 4 0 0 1 8 0v2"/></svg></div><div class="qlbl">Работа</div><div class="qsub">Ресурсы поселка</div></div>
         <div class="quick-card" onclick="navTo('taxi')" role="button" tabindex="0" aria-label="Вызвать такси"><div class="qico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14l2-6h12l2 6v5h-2v-2H6v2H4z M6 14h12 M8 17h.01 M16 17h.01"/></svg></div><div class="qlbl">Такси</div><div class="qsub">250₽ за км</div></div>
         <div class="quick-card" onclick="navTo('deliveryOrderPage')" role="button" tabindex="0" aria-label="Заказать доставку из бизнеса"><div class="qico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h12v10H3z M15 11h4l2 3v3h-6 M7 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></div><div class="qlbl">Доставка</div><div class="qsub">Бизнесы и маркет</div></div>
         <div class="quick-card" onclick="navTo('jobs')" role="button" tabindex="0" aria-label="Перейти к работе"><div class="qico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V7l8-4 8 4v13z M8 11h8 M8 15h8"/></svg></div><div class="qlbl">Работа</div><div class="qsub">Карьера & доход</div></div>
@@ -1679,9 +1643,9 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
             <label style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:800;margin:8px 0;cursor:pointer;"><input type="checkbox" id="mktNegotiable" onchange="toggleMktPriceFields()"> Цена договорная</label>
             <input type="number" id="mktPrice" placeholder="Цена (₽)" min="0" step="1">
             <input type="text" id="mktSalaryHint" placeholder="Зарплата (для категории «Работа»), напр. 350₽/смена" style="display:none;" maxlength="50">
-            <input type="url" id="mktPhoto" placeholder="Фото URL" pattern="https?://.+" title="Введите корректный URL">
+            <input type="hidden" id="mktPhoto"><div class="v8-note">До 8 фотографий. Первое фото станет обложкой объявления.</div>
             <label class="file-upload-btn" for="mktPhotoFile">📷 Выбрать фото</label>
-            <input type="file" id="mktPhotoFile" accept="image/*" onchange="handleMktPhoto(event)">
+            <input type="file" id="mktPhotoFile" accept="image/jpeg,image/png,image/webp" multiple onchange="handleMktPhoto(event)">
             <div id="mktPhotoPreview" style="display:none;margin-bottom:8px;"><img id="mktPhotoImg" style="width:100%;max-height:140px;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--border);"></div>
             <select id="mktCategory" onchange="toggleMktPriceFields()">
                 <option value="other">📦 Прочее</option>
@@ -1699,27 +1663,6 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
 </div>
 
 <!-- SHOP -->
-<div id="shop" class="section" data-title="Магазин">
-    <div class="card">
-        <div class="card-title">🛍 Заказ ресурсов</div>
-        <div class="item-row"><span>🌲 Небольшое бревно <b style="color:var(--primary)">250₽</b></span><input type="number" id="sB" value="0" min="0" oninput="recalcShop()"></div>
-        <div class="item-row"><span><span style="font-size:1.15em;line-height:1;" title="Палка">🥢</span> Палка <b style="color:var(--primary)">30₽</b></span><input type="number" id="sP" value="0" min="0" oninput="recalcShop()"></div>
-        <div class="item-row"><span>🍃 Листья <b style="color:var(--primary)">3₽</b></span><input type="number" id="sL" value="0" min="0" oninput="recalcShop()"></div>
-        <div class="item-row"><span><span style="font-size:1.15em;line-height:1;" title="Камень">🗿</span> Камень <b style="color:var(--primary)">100₽</b></span><input type="number" id="sK" value="0" min="0" oninput="recalcShop()"></div>
-        <input type="text" id="sAddr" placeholder="Адрес доставки" style="margin-top:10px;">
-        <div style="display:flex;gap:8px;margin-bottom:4px;">
-            <button class="toggle-map-btn" style="flex:1;" id="shopMapToggleBtn" onclick="toggleShopMap()">🗺 Выбрать на карте</button>
-            <button class="taxi-point-btn" onclick="detectShopLocation()" style="margin-bottom:0;flex-shrink:0;">📍</button>
-        </div>
-        <div id="shopMap"></div>
-        <div id="shopDeliveryNote" style="display:none;font-size:12px;color:var(--muted);text-align:right;margin-bottom:4px;">включает доставку <b style="color:var(--primary)">+30₽</b></div>
-        <div class="total-row"><span>Итого</span><span class="total-val"><span id="sTotal">0</span> ₽</span></div>
-        <button id="btnBuy" class="btn btn-primary" onclick="buyShop()">Оформить доставку</button>
-    </div>
-    <div id="shopStatus"></div>
-</div>
-
-<!-- TAXI -->
 <div id="taxi" class="section" data-title="Такси">
     <div id="taxiForm" class="card">
         <div class="card-title">🛵 Вызов такси</div>
@@ -2074,7 +2017,7 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
             <option value="Рекламщик">📢 Рекламщик</option>
             <option value="Врач">🏥 Врач</option>
         </select>
-        <textarea id="jAppText" placeholder="Расскажите о себе и почему должны принять именно вас на эту работу..." style="min-height:80px;margin-top:8px;"></textarea>
+        <textarea id="jAppText" maxlength="1200" placeholder="Расскажите о себе и почему должны принять именно вас на эту работу..." style="min-height:80px;margin-top:8px;"></textarea>
         <button class="btn btn-primary" onclick="sendApp()">Подать заявку</button>
         <button class="btn btn-red" id="quitJobBtn" style="display:none;margin-top:8px;" onclick="quitJob()">Уволиться</button>
         <div id="myAppStatus" style="margin-top:12px;"></div>
@@ -4159,13 +4102,14 @@ window.kapaniLoadLeaflet = (function(){
       try{
         if(id==='autoSchool') setTimeout(()=>injectRightsCard(),40);
         if(id==='kEducation') renderKEducation().catch(e=>{console.error('[K-education render]',e);const host=qs('kEducationContent');if(host)host.innerHTML='<div class=\"card\"><div style=\"font-weight:900;color:var(--red);\">❌ Не удалось загрузить К-образование</div><div style=\"font-size:12px;color:var(--muted);margin-top:6px;\">Попробуйте открыть вкладку ещё раз.</div></div>';});
-        if(id==='casino') renderCasino().catch(e=>{console.error('[Casino render]',e);const ids=['blackjackArea','slotsArea','rouletteArea','coinflipArea','diceArea','baccaratArea','videoPokerArea'];ids.forEach(id=>{const el=qs(id);if(el)el.innerHTML='<div style=\"color:var(--red);\">❌ Не удалось загрузить игру</div>';});});
+        if(id==='casino') (window.kapaniRenderCasino||renderCasino)().catch(e=>{console.error('[Casino render]',e);const ids=['blackjackArea','slotsArea','rouletteArea','coinflipArea','diceArea','baccaratArea','videoPokerArea'];ids.forEach(id=>{const el=qs(id);if(el)el.innerHTML='<div style=\"color:var(--red);\">❌ Не удалось загрузить игру</div>';});});
         if(id==='tasks') setTimeout(()=>{const u=window.allUsersCache?.[current()]||{};const el=qs('taskBalanceDisplay');if(el)el.textContent=`${Number(u.taskBalance||0).toLocaleString('ru-RU')} ₽`;},80);
         if(id==='adminPage') setTimeout(()=>injectEconomyAdminUI(),120);
       }catch(e){console.warn('[Kapani economy nav]',e)}
       return ret;
     };
 
+    window.__kapaniEconomyReady=true;document.dispatchEvent(new Event("kapani-economy-ready"));
     // Current-page integrations are intentionally lazy and are invoked from nav hooks.
   };
   waitReady().catch(e=>console.error('[Kapani Economy Extension]',e));
