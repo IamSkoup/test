@@ -1209,6 +1209,7 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
 <link rel="stylesheet" href="assets/kapani-v8.css?v=8">
 <link rel="stylesheet" href="assets/kapani-finishes.css?v=9">
 <link rel="stylesheet" href="assets/kapani-v10.css?v=13">
+<link rel="stylesheet" href="assets/kapani-v14-fixes.css?v=14">
 </head>
 <body>
 
@@ -1704,12 +1705,12 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
     </div>
     <div class="card" style="border-color:rgba(255,128,106,.25);background:rgba(255,128,106,.04);">
         <div class="card-title">📈 Накопительный счёт</div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:12px;background:var(--surface2);border-radius:var(--r-sm);border:1px solid var(--border);">
-            <div>
+        <div class="kp-savings-summary">
+            <div class="kp-savings-balance">
                 <div style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:800;">На счёте</div>
                 <div style="font-size:24px;font-weight:900;color:var(--gold);" id="savingsBalanceDisplay">0 ₽</div>
             </div>
-            <div style="font-size:12px;color:var(--muted);text-align:right;line-height:1.5;">ставка: <span id="savingsRateDisplay">7%</span><br>по сумме на счёте</div>
+            <div class="kp-savings-rate">Ставка: <span id="savingsRateDisplay">+0,3% в день</span></div>
         </div>
         <input type="number" id="savingsAmt" placeholder="Сумма (₽)" min="1" step="1">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
@@ -2824,7 +2825,7 @@ window.kapaniLoadLeaflet = (function(){
 <script src="./functions/subscription-config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8" defer></script>
 <script src="./assets/supabase-bridge-classic.js" defer></script>
-<script src="./assets/kapani-main-classic.js?v=13" defer></script>
+<script src="./assets/kapani-main-classic.js?v=14" defer></script>
 
 <script>
 // ═══════════════════════════════════════════════════

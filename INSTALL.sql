@@ -1,4 +1,4 @@
--- КАПАНИ: безопасное обновление существующей базы (миграции 008–017).
+-- КАПАНИ: безопасное обновление существующей базы (миграции 008–018).
 -- Сначала сделайте резервную копию Supabase. Проверьте, что это проект Kapani.
 -- Требует установленную схему 001–007 и защищённые таблицы kp_profiles, kp_wallets, kp_ledger.
 -- Не применяйте файл к чистой базе.
@@ -138,326 +138,6 @@ revoke all on function public.kp_market_action(text,text,jsonb) from public,anon
 grant execute on function public.kp_market_action(text,text,jsonb) to authenticated;
 commit;
 
--- ===== 010_casino_and_events.sql =====
-begin;
-create table if not exists public.kp_v8_casino_accounts(user_id uuid primary key, balance bigint not null default 0 check(balance between 0 and 1000000), day date, deposits bigint not null default 0, wagers bigint not null default 0, last_round timestamptz);
-create table if not exists public.kp_v8_casino_ops(id uuid primary key,user_id uuid not null,args jsonb not null,result jsonb not null,created_at timestamptz not null default now());
-create table if not exists public.kp_v8_events(id uuid primary key,title text not null,kind text not null,sides jsonb not null,closes_at timestamptz not null,status text not null default 'open',winner integer,budget bigint not null,liability bigint not null default 0,created_at timestamptz not null default now());
-create table if not exists public.kp_v8_bets(id uuid primary key,user_id uuid not null,event_id uuid not null references public.kp_v8_events(id),side integer not null,stake bigint not null,payout bigint not null,status text not null default 'pending');
-alter table public.kp_v8_casino_accounts enable row level security;
-alter table public.kp_v8_casino_ops enable row level security;
-alter table public.kp_v8_events enable row level security;
-alter table public.kp_v8_bets enable row level security;
-revoke all on public.kp_v8_casino_accounts,public.kp_v8_casino_ops,public.kp_v8_events,public.kp_v8_bets from anon,authenticated;
-create or replace function public.kp_v8_random(n integer) returns integer language plpgsql volatile security definer set search_path='' as $$
-declare b bytea; v bigint; lim bigint;
-begin
- if n<1 or n>1000000 then raise exception 'Invalid random range'; end if;
- lim:=4294967296-(4294967296%n);
- loop
- b:=extensions.gen_random_bytes(4);
- v:=get_byte(b,0)::bigint*16777216+get_byte(b,1)::bigint*65536+get_byte(b,2)::bigint*256+get_byte(b,3);
- exit when v<lim;
- end loop;
- return (v%n)::integer;
-end; $$;
--- Internal helper; call only while holding the users root lock. All changes
--- enter the protected ledger and refresh the compatibility profile balance.
-create or replace function public.kp_v8_money(n text,delta bigint,op uuid,kind text,details jsonb default '{}') returns bigint language plpgsql security definer set search_path='' as $$
-declare uid uuid; bal bigint; d jsonb;
-begin
- if delta is null or op is null or n is null then raise exception 'Invalid financial operation';end if;
- select user_id into uid from public.kp_profiles where nickname=n;
- if uid is null then raise exception 'Account missing'; end if;
- select balance into bal from public.kp_wallets where user_id=uid for update;
- if bal is null or bal+delta<0 or bal+delta>1000000000 then raise exception 'Insufficient funds or balance limit'; end if;
- if exists(select 1 from public.kp_ledger where operation_id=op) then raise exception 'Duplicate financial operation'; end if;
- update public.kp_wallets set balance=balance+delta,updated_at=now() where user_id=uid;
- insert into public.kp_ledger(operation_id,user_id,account,amount,kind,details) values(op,uid,'wallet',delta,kind,details);
- select document into d from public.kp_tree_roots where branch='users' for update;
- perform public.kp_v8_put('users',jsonb_set(d,array[n,'balance'],to_jsonb(bal+delta),true));
- return bal+delta;
-end; $$;
-create or replace function public.kp_casino_v8(p_action text,p_id uuid default null,p_amount bigint default 0,p_game text default null,p_choice text default null) returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor(); u jsonb; c public.kp_v8_casino_accounts%rowtype; old public.kp_v8_casino_ops%rowtype; args jsonb; result jsonb; payout bigint:=0; outcome jsonb; x integer; y integer; z integer; main bigint; today date:=(now() at time zone 'Europe/Moscow')::date;
-begin
- if a is null then raise exception 'Authentication required'; end if;
- select document->a into u from public.kp_tree_roots where branch='users' for update;
- insert into public.kp_v8_casino_accounts(user_id,day) values(auth.uid(),today) on conflict do nothing;
- select * into c from public.kp_v8_casino_accounts where user_id=auth.uid() for update;
- select balance into main from public.kp_wallets where user_id=auth.uid();
- if c.day is distinct from today then c.day:=today;c.deposits:=0;c.wagers:=0; end if;
- if p_action='view' then return jsonb_build_object('balance',c.balance,'main',main,'dailyWagerRemaining',greatest(0,20000-c.wagers)); end if;
- if p_action not in ('deposit','withdraw','play') or p_id is null then raise exception 'Invalid operation'; end if;
- args:=jsonb_build_object('action',p_action,'amount',p_amount,'game',p_game,'choice',p_choice);
- select * into old from public.kp_v8_casino_ops where id=p_id;
- if found then
-   if old.user_id<>auth.uid() or old.args<>args then raise exception 'Request identifier mismatch'; end if;
-   return old.result;
- end if;
- if coalesce(u->>'accountFrozen','false')='true' or coalesce(u->>'accountVerified','false')<>'true' or coalesce(u->'roles'->>'migrant','false')='true' then raise exception 'Verified active account required'; end if;
- if p_amount is null or p_amount<1 or p_amount>10000 then raise exception 'Amount must be between 1 and 10000'; end if;
- if p_action='deposit' then
-   if c.deposits+p_amount>10000 then raise exception 'Daily deposit limit: 10000'; end if;
-   main:=public.kp_v8_money(a,-p_amount,p_id,'casino_deposit'); c.balance:=c.balance+p_amount; c.deposits:=c.deposits+p_amount;
- elsif p_action='withdraw' then
-   if c.balance<p_amount then raise exception 'Insufficient casino balance'; end if;
-   main:=public.kp_v8_money(a,p_amount,p_id,'casino_withdraw'); c.balance:=c.balance-p_amount;
- else
-   if p_amount>1000 or c.wagers+p_amount>20000 then raise exception 'Stake limit: 1000; daily turnover: 20000'; end if;
-   if c.balance<p_amount then raise exception 'Insufficient casino balance'; end if;
-   if c.last_round>clock_timestamp()-interval '2 seconds' then raise exception 'Wait for the current round'; end if;
-   if p_game='roulette' then
-     if p_choice is null or p_choice not in ('red','black','zero') then raise exception 'Select a roulette field'; end if;
-     x:=public.kp_v8_random(37); outcome:=to_jsonb(x);
-     if (p_choice='zero' and x=0) then payout:=p_amount*36;
-     elsif x>0 and ((p_choice='red' and x=any(array[1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36])) or (p_choice='black' and not(x=any(array[1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36])))) then payout:=p_amount*2; end if;
-   elsif p_game='dice' then
-     if coalesce(p_choice,'') !~ '^[1-6]$' then raise exception 'Choose 1 to 6'; end if;
-     x:=public.kp_v8_random(6)+1;outcome:=to_jsonb(x);if x=p_choice::integer then payout:=floor(p_amount*5.7);end if;
-   elsif p_game='slots' then
-     x:=public.kp_v8_random(6);y:=public.kp_v8_random(6);z:=public.kp_v8_random(6);outcome:=jsonb_build_array(x,y,z);
-     if x=y and y=z then payout:=p_amount*12;elsif x=y or y=z or x=z then payout:=floor(p_amount*1.5);end if;
-   elsif p_game='wheel' then
-     x:=public.kp_v8_random(20);y:=case when x<11 then 0 when x<16 then 1 when x<18 then 2 else 5 end;outcome:=to_jsonb(y);payout:=p_amount*y;
-   else raise exception 'Unknown game'; end if;
-   c.balance:=c.balance-p_amount+payout;c.wagers:=c.wagers+p_amount;c.last_round:=clock_timestamp();
- end if;
- update public.kp_v8_casino_accounts set balance=c.balance,day=c.day,deposits=c.deposits,wagers=c.wagers,last_round=c.last_round where user_id=auth.uid();
- result:=jsonb_build_object('id',p_id,'balance',c.balance,'main',main,'outcome',outcome,'payout',payout,'stake',p_amount,'game',p_game);
- insert into public.kp_v8_casino_ops(id,user_id,args,result) values(p_id,auth.uid(),args,result);
- return result;
-end; $$;
-create or replace function public.kp_events_v8(p_action text,p_id uuid default null,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor(); e public.kp_v8_events%rowtype; bet public.kp_v8_bets%rowtype; n text; sides jsonb; side integer; stake bigint; pay bigint; total bigint:=0; winning_side integer; arr jsonb; item jsonb; u jsonb;
-begin
- if a is null then raise exception 'Authentication required'; end if;
- if p_action='view' then
-   select coalesce(jsonb_agg(to_jsonb(t) order by t.created_at desc),'[]') into arr from (select * from public.kp_v8_events order by created_at desc limit 100)t;
-   return jsonb_build_object('events',arr,'bets',coalesce((select jsonb_agg(to_jsonb(b)) from public.kp_v8_bets b where user_id=auth.uid()),'[]'));
- end if;
- select document->a into u from public.kp_tree_roots where branch='users' for update;
- if p_id is null then raise exception 'Request ID required'; end if;
- if p_action='create' then
-   if a<>'Кайон' then raise exception 'Mayor access required'; end if;
-   if exists(select 1 from public.kp_v8_events where id=p_id) then return jsonb_build_object('ok',true); end if;
-   sides:=p_data->'sides';
-   if coalesce(jsonb_typeof(sides),'null')<>'array' or jsonb_array_length(sides) not between 2 and 8 or length(trim(coalesce(p_data->>'title',''))) not between 3 and 120 or p_data->>'kind' not in ('sport','battle') then raise exception 'Invalid event'; end if;
-   for item in select value from jsonb_array_elements(sides) loop
-     if length(trim(coalesce(item->>'name',''))) not between 1 and 80 or item->>'odds' is null or (item->>'odds')::numeric not between 1.01 and 20 then raise exception 'Invalid side or odds'; end if;
-   end loop;
-   stake:=(p_data->>'budget')::bigint;
-   if stake is null or p_data->>'closesAt' is null or stake not between 100 and 100000 or (p_data->>'closesAt')::timestamptz<=now() then raise exception 'Invalid budget or deadline'; end if;
-   perform public.kp_v8_money(a,-stake,p_id,'event_reserve',jsonb_build_object('title',p_data->>'title'));
-   insert into public.kp_v8_events(id,title,kind,sides,closes_at,budget) values(p_id,trim(p_data->>'title'),p_data->>'kind',sides,(p_data->>'closesAt')::timestamptz,stake);
-   return jsonb_build_object('ok',true);
- end if;
- if p_action='bet' then
-   select * into bet from public.kp_v8_bets where id=p_id;
-   if found then
-     if bet.user_id<>auth.uid() or bet.event_id<>(p_data->>'event')::uuid or bet.side<>(p_data->>'side')::integer or bet.stake<>(p_data->>'stake')::bigint then raise exception 'Request mismatch'; end if;
-     return to_jsonb(bet);
-   end if;
-   if coalesce(u->>'accountVerified','false')<>'true' or coalesce(u->>'accountFrozen','false')='true' then raise exception 'Verified active account required'; end if;
-   select * into e from public.kp_v8_events where id=(p_data->>'event')::uuid for update;
-   side:=(p_data->>'side')::integer;stake:=(p_data->>'stake')::bigint;
-   if e.id is null or e.status<>'open' or e.closes_at<=now() or side is null or stake is null or side<0 or side>=jsonb_array_length(e.sides) or stake not between 10 and 1000 then raise exception 'Bet unavailable'; end if;
-   if (select count(*) from public.kp_v8_bets where event_id=e.id and user_id=auth.uid())>=10 then raise exception 'Maximum 10 bets per event'; end if;
-   pay:=floor(stake*(e.sides->side->>'odds')::numeric);
-   if e.liability+pay>e.budget+stake then raise exception 'Event payout reserve exhausted'; end if;
-   perform public.kp_v8_money(a,-stake,p_id,'event_bet',jsonb_build_object('event',e.id,'side',side));
-   insert into public.kp_v8_bets(id,user_id,event_id,side,stake,payout) values(p_id,auth.uid(),e.id,side,stake,pay);
-   update public.kp_v8_events set budget=budget+stake,liability=liability+pay where id=e.id;
- else
-   if a<>'Кайон' or p_action not in ('settle','cancel') then raise exception 'Mayor access required'; end if;
-   select * into e from public.kp_v8_events where id=p_id for update;
-   if e.id is null then raise exception 'Event missing'; end if;
-   if e.status<>'open' then return jsonb_build_object('ok',true,'repeated',true); end if;
-   winning_side:=(p_data->>'winner')::integer;
-   if p_action='settle' and (winning_side is null or winning_side<0 or winning_side>=jsonb_array_length(e.sides) or now()<e.closes_at) then raise exception 'Wait for closing and select winner'; end if;
-   for bet in select * from public.kp_v8_bets where event_id=e.id order by user_id loop
-     pay:=case when p_action='cancel' then bet.stake when bet.side=winning_side then bet.payout else 0 end;
-     if pay>0 then
-       select nickname into n from public.kp_profiles where user_id=bet.user_id;
-       perform public.kp_v8_money(n,pay,(md5(bet.id::text||':result'))::uuid,'event_result',jsonb_build_object('event',e.id));
-       total:=total+pay;
-     end if;
-     update public.kp_v8_bets set status=case when p_action='cancel' then 'refunded' when pay>0 then 'won' else 'lost' end where id=bet.id;
-   end loop;
-   perform public.kp_v8_money(a,e.budget-total,(md5(e.id::text||':remainder'))::uuid,'event_reserve_return');
-   update public.kp_v8_events set status=case when p_action='cancel' then 'cancelled' else 'settled' end,winner=winning_side,budget=0 where id=e.id;
- end if;
- return jsonb_build_object('ok',true);
-end; $$;
-revoke all on function public.kp_v8_random(integer),public.kp_v8_money(text,bigint,uuid,text,jsonb) from public,anon,authenticated;
-revoke all on function public.kp_casino_v8(text,uuid,bigint,text,text),public.kp_events_v8(text,uuid,jsonb) from public,anon;
-grant execute on function public.kp_casino_v8(text,uuid,bigint,text,text),public.kp_events_v8(text,uuid,jsonb) to authenticated;
-commit;
-
--- ===== 012_hospital_and_business.sql =====
-begin;
--- Business balances are independent accounts, backed by their own journal.
--- Pre-existing balances are retained; missing historical entries are not invented.
-create table if not exists public.kp_v8_business_ledger(
- id text primary key,biz_id text not null,actor text not null,
- amount bigint not null,balance_after bigint not null,kind text not null,
- details jsonb not null default '{}'::jsonb,created_at timestamptz not null default now()
-);
-create index if not exists kp_v8_business_ledger_biz_idx on public.kp_v8_business_ledger(biz_id,created_at desc);
-alter table public.kp_v8_business_ledger enable row level security;
-revoke all on public.kp_v8_business_ledger from public,anon,authenticated;
-create or replace function public.kp_business_statement_v8(p_biz text) returns jsonb
-language plpgsql stable security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();b jsonb;lines jsonb;
-begin
- select document->p_biz into b from public.kp_tree_roots where branch='businesses';
- if a is null or b is null or (a<>b->>'owner' and a<>'Кайон') then raise exception 'Business owner required';end if;
- select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at desc),'[]') into lines from
-   (select id,biz_id,actor,amount,balance_after,kind,details,created_at from public.kp_v8_business_ledger
-    where biz_id=p_biz order by created_at desc limit 100)e;
- return jsonb_build_object('balance',coalesce((b->>'balance')::bigint,0),'lines',lines);
-end; $$;
-create or replace function public.kp_hospital_view() returns jsonb language plpgsql stable security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();d jsonb;apps jsonb;assistant_apps jsonb;staff boolean;
-begin
- if a is null then raise exception 'Authentication required';end if;
- select document into d from public.kp_tree_roots where branch='hospital';d:=coalesce(d,'{}');
- staff:=a='Кайон' or public.kp_v8_role(a,'Врач') or public.kp_v8_role(a,'Помощник врача');
- select coalesce(jsonb_object_agg(key,value),'{}') into apps from jsonb_each(coalesce(d->'appointments','{}')) where staff or value->>'clientNick'=a;
- select coalesce(jsonb_object_agg(key,value),'{}') into assistant_apps from jsonb_each(coalesce(d->'assistantApplications','{}')) where staff or value->>'from'=a;
- return jsonb_build_object('services',coalesce(d->'services','{}'),'photos',coalesce(d->'photos','{}'),'appointments',apps,'assistantApplications',assistant_apps,'assistantSalary',case when staff then coalesce(d->'assistantSalary','0') else '0'::jsonb end);
-end; $$;
-create or replace function public.kp_v8_notify(n text,t text,kind text,key text) returns void language plpgsql security definer set search_path='' as $$
-declare d jsonb;at_ms bigint:=(extract(epoch from now())*1000)::bigint;
-begin
- select document into d from public.kp_tree_roots where branch='users' for update;
- if d->n is null then return;end if;
- d:=public.kp_tree_set_deep(d,array[n,'notifications',key],jsonb_build_object('id',key,'text',left(t,500),'type',kind,'read',false,'seen',false,'createdAt',at_ms,'time',to_char(now() at time zone 'Europe/Moscow','HH24:MI')));
- perform public.kp_v8_put('users',d);
-end; $$;
-create or replace function public.kp_employment_v8(p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();u jsonb;root jsonb;b jsonb;app jsonb;apps jsonb;jobs jsonb;target text;role_id text;role_name text;branch_name text;path text[];limit_jobs integer;at_ms bigint:=(extract(epoch from now())*1000)::bigint;
-begin
- if a is null or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid employment request';end if;
- select document into u from public.kp_tree_roots where branch='users' for update;
- branch_name:=case when p_data->>'kind'='assistant' then 'hospital' else 'bizJobApps' end;
- insert into public.kp_tree_roots(branch) values(branch_name) on conflict do nothing;
- select document into root from public.kp_tree_roots where branch=branch_name for update;
- if branch_name='hospital' then
-   path:=array['assistantApplications',p_id];role_name:='Помощник врача';
- else
-   select document->(p_data->>'bizId') into b from public.kp_tree_roots where branch='businesses' for update;
-   if b is null or b->>'status'<>'active' then raise exception 'Business unavailable';end if;
-   path:=array[p_data->>'bizId',p_id];
- end if;
- app:=root #> path;
- if p_action='apply' then
-   if app is not null then if app->>'from'=a then return app;else raise exception 'Duplicate application';end if;end if;
-   if coalesce(u->a->>'accountVerified','false')<>'true' or u->a->>'accountFrozen'='true' then raise exception 'Verified active account required';end if;
-   if exists(select 1 from jsonb_each(coalesce(root->path[1],'{}')) e where coalesce(e.value->>'from',e.value->>'applicant')=a and e.value->>'status'='pending') then raise exception 'Application already pending';end if;
-   role_id:=p_data->>'roleId';
-   if branch_name='hospital' then
-     if coalesce((u->a->>'kveScore')::integer,0)<80 then raise exception 'KVE score 80 required';end if;
-   else
-     if b->>'owner'=a or b->'roles'->role_id is null then raise exception 'Select a vacancy';end if;
-     role_name:=b->'roles'->role_id->>'name';
-   end if;
-   app:=jsonb_build_object('id',p_id,'from',a,'applicant',a,'bizId',p_data->>'bizId','roleId',role_id,'roleName',role_name,'text',left(coalesce(p_data->>'text',''),1200),'status','pending','createdAt',at_ms);
- else
-   if branch_name='hospital' then
-     if not public.kp_v8_role(a,'Врач') then raise exception 'Doctor access required';end if;
-   elsif a is distinct from b->>'owner' and p_action<>'quit' then raise exception 'Business owner required';end if;
-   if p_action in ('approve','reject') then
-     if app is null then raise exception 'Application missing';end if;
-     if app->>'status'<>'pending' then return app;end if;
-     target:=coalesce(app->>'from',app->>'applicant');role_id:=app->>'roleId';role_name:=app->>'roleName';
-   else target:=case when p_action='quit' then a else p_data->>'target' end;end if;
-   jobs:=coalesce(u->target->'employments','[]');
-   if p_action='approve' then
-     limit_jobs:=case when coalesce((u->target->>'subscriptionExpiry')::timestamptz,now())>now() then case u->target->>'subscription' when 'plus' then 3 when 'ultra' then 4 when 'prime' then 5 else 2 end else 2 end;
-     if jsonb_array_length(jobs)>=limit_jobs then raise exception 'Employment limit reached';end if;
-     if branch_name='hospital' then
-       if exists(select 1 from jsonb_each(u)e where public.kp_v8_role(e.key,'Помощник врача')) or coalesce((u->target->>'kveScore')::integer,0)<80 then raise exception 'Assistant unavailable';end if;
-       jobs:=jobs||jsonb_build_array(jsonb_build_object('id','muni_Помощник врача','type','municipal','role','Помощник врача'));
-     else
-       if b->'roles'->role_id is null or b->'employees' ? target or (select count(*) from jsonb_object_keys(coalesce(b->'employees','{}')))>=3+least(100,coalesce((b->'limitBonus'->>'employees')::integer,(b->'limitBonus'->>'employee')::integer,0)) then raise exception 'Vacancy unavailable';end if;
-       b:=public.kp_tree_set_deep(b,array['employees',target],jsonb_build_object('roleId',role_id,'roleName',role_name,'joinedAt',at_ms));
-       jobs:=jobs||jsonb_build_array(jsonb_build_object('id','biz_'||(p_data->>'bizId'),'type','business','bizId',p_data->>'bizId','bizName',b->>'name','role',role_name));
-     end if;
-     u:=jsonb_set(u,array[target],(u->target)||jsonb_build_object('employments',jobs,'displayJob',role_name)||case when branch_name='hospital' then jsonb_build_object('job','Помощник врача') else '{}'::jsonb end);
-   elsif p_action in ('fire','quit') and branch_name<>'hospital' then
-     if b->'employees'->target is null then raise exception 'Employee missing';end if;
-     b:=b #- array['employees',target];
-     select coalesce(jsonb_agg(value),'[]') into jobs from jsonb_array_elements(jobs) where value->>'bizId' is distinct from p_data->>'bizId';
-     u:=jsonb_set(u,array[target],(u->target)||jsonb_build_object('employments',jobs,'displayJob',coalesce(jobs->0->>'role','Житель'),'employerBizId',null));
-   elsif p_action<>'reject' then raise exception 'Unsupported employment action';end if;
-   if p_action<>'reject' then perform public.kp_v8_put('users',u);end if;
-   if branch_name<>'hospital' then
-     select document into apps from public.kp_tree_roots where branch='businesses';perform public.kp_v8_put('businesses',jsonb_set(apps,array[p_data->>'bizId'],b));
-   end if;
-   app:=coalesce(app,'{}')||jsonb_build_object('status',case when p_action='approve' then 'approved' when p_action='reject' then 'rejected' else 'closed' end,'reviewedAt',at_ms);
-   perform public.kp_v8_notify(target,'Заявка на работу: '||case when p_action='approve' then 'одобрена' when p_action='reject' then 'отклонена' else 'работа завершена' end,'system','employment_'||p_id||p_action);
- end if;
- if p_action='apply' then
-   if branch_name='hospital' then select key into target from jsonb_each(u)e where public.kp_v8_role(e.key,'Врач') order by key limit 1;else target:=b->>'owner';end if;
-   perform public.kp_v8_notify(target,'Новая заявка на работу от '||a,'system','employment_'||p_id);
- end if;
- root:=public.kp_tree_set_deep(root,path,app);perform public.kp_v8_put(branch_name,root);return app;
-end; $$;
-create or replace function public.kp_business_order_v8(p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
-declare a text:=public.kp_v8_actor();u jsonb;b jsonb;root jsonb;o jsonb;items jsonb:='[]';entry record;product jsonb;qty integer;total bigint:=0;owner text;at_ms bigint:=(extract(epoch from now())*1000)::bigint;bid text:=p_data->>'bizId';biz_root jsonb;biz_balance bigint;
-begin
- if a is null or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid order';end if;
- select document into u from public.kp_tree_roots where branch='users' for update;
- select document->bid into b from public.kp_tree_roots where branch='businesses' for update;
- if b is null then raise exception 'Business missing';end if;owner:=b->>'owner';
- insert into public.kp_tree_roots(branch) values('bizOrders') on conflict do nothing;
- select document into root from public.kp_tree_roots where branch='bizOrders' for update;o:=root->bid->p_id;
- if p_action='create' then
-   if o is not null then if o->>'client'=a then return o;else raise exception 'Request mismatch';end if;end if;
-   if b->>'status'<>'active' or owner=a or coalesce(u->a->>'accountVerified','false')<>'true' or u->a->>'accountFrozen'='true' then raise exception 'Purchase unavailable';end if;
-   if coalesce(jsonb_typeof(p_data->'cart'),'null')<>'object' or (select count(*) from jsonb_object_keys(p_data->'cart')) not between 1 and 30 then raise exception 'Invalid cart';end if;
-   for entry in select key,value from jsonb_each(p_data->'cart') loop
-     qty:=(entry.value#>>'{}')::integer;product:=b->'products'->entry.key;
-     if qty is null or qty not between 1 and 20 or product is null or product->>'available'='false' or product->>'price' is null or (product->>'price')::numeric not between 1 and 100000 then raise exception 'Product unavailable';end if;
-     total:=total+qty*(product->>'price')::bigint;
-     items:=items||jsonb_build_array(jsonb_build_object('productId',entry.key,'name',product->>'name','qty',qty,'price',(product->>'price')::bigint,'total',qty*(product->>'price')::bigint));
-   end loop;
-   if total>100000 then raise exception 'Order limit 100000';end if;
-   perform public.kp_v8_money(a,-total,(md5(p_id||':biz-reserve'))::uuid,'business_order_reserve',jsonb_build_object('bizId',bid));
-   o:=jsonb_build_object('id',p_id,'bizId',bid,'bizName',b->>'name','client',a,'clientNick',a,'owner',owner,'items',items,'total',total,'amount',total,'status','paid_waiting_receipt','escrowAmount',total,'clientConfirmed',false,'ownerConfirmed',false,'createdAt',at_ms);
- elsif p_action='confirm' then
-   if o is null or (a is distinct from o->>'client' and a<>owner and b->'employees'->a is null) then raise exception 'Order participant or employee required';end if;
-   if o->>'status'='completed' then return o;end if;
-   if o->>'status'<>'paid_waiting_receipt' then raise exception 'Invalid order state';end if;
-   o:=o||case when a=o->>'client' then '{"clientConfirmed":true}'::jsonb else '{"ownerConfirmed":true}'::jsonb end;
-   if o->>'ownerConfirmed'='true' and o->>'clientConfirmed'='true' then
-     -- Both parties confirmed: credit the business account atomically.
-     select document into biz_root from public.kp_tree_roots where branch='businesses' for update;
-     b:=biz_root->bid;biz_balance:=coalesce((b->>'balance')::bigint,0)+(o->>'escrowAmount')::bigint;
-     if biz_balance>1000000000 then raise exception 'Business account limit';end if;
-     b:=b||jsonb_build_object('balance',biz_balance);
-     perform public.kp_v8_put('businesses',jsonb_set(biz_root,array[bid],b));
-     insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
-       values('order:'||bid||':'||p_id,bid,a,(o->>'escrowAmount')::bigint,biz_balance,'sale',jsonb_build_object('client',o->>'client','orderId',p_id));
-     o:=o||jsonb_build_object('status','completed','escrowAmount',0,'payoutDone',true,'paidAt',at_ms);
-   end if;
- elsif p_action='cancel' then
-   if o is null or a is distinct from o->>'client' then raise exception 'Client required';end if;
-   if o->>'status'='cancelled' then return o;end if;
-   if o->>'status'<>'paid_waiting_receipt' or o->>'ownerConfirmed'='true' then raise exception 'Order already handed over';end if;
-   perform public.kp_v8_money(a,(o->>'escrowAmount')::bigint,(md5(p_id||':biz-refund'))::uuid,'business_order_refund');o:=o||'{"status":"cancelled","escrowAmount":0}';
- else raise exception 'Unknown order action';end if;
- root:=public.kp_tree_set_deep(root,array[bid,p_id],o);perform public.kp_v8_put('bizOrders',root);
- perform public.kp_v8_notify(case when a=owner then o->>'client' else owner end,'Заказ в «'||(b->>'name')||'»: '||case when p_action='create' then 'новый заказ' when p_action='cancel' then 'отменён' else 'получение подтверждено' end,'system','bizorder_'||p_id||p_action||a);
- return o;
-end; $$;
-revoke all on function public.kp_v8_notify(text,text,text,text) from public,anon,authenticated;
-revoke all on function public.kp_business_statement_v8(text) from public,anon;
-grant execute on function public.kp_business_statement_v8(text) to authenticated;
-revoke all on function public.kp_employment_v8(text,text,jsonb),public.kp_business_order_v8(text,text,jsonb) from public,anon;
-grant execute on function public.kp_employment_v8(text,text,jsonb),public.kp_business_order_v8(text,text,jsonb) to authenticated;
-commit;
 
 -- ===== 009_services.sql =====
 -- Install after 010 (uses kp_v8_money). See INSTALL.sql for the correct order.
@@ -616,6 +296,164 @@ grant execute on function public.kp_service_quote_v8(text,numeric,numeric,numeri
 revoke all on function public.kp_service_v8(text,text,text,jsonb) from public,anon;
 grant execute on function public.kp_service_v8(text,text,text,jsonb) to authenticated;
 commit;
+
+
+-- ===== 010_casino_and_events.sql =====
+begin;
+create table if not exists public.kp_v8_casino_accounts(user_id uuid primary key, balance bigint not null default 0 check(balance between 0 and 1000000), day date, deposits bigint not null default 0, wagers bigint not null default 0, last_round timestamptz);
+create table if not exists public.kp_v8_casino_ops(id uuid primary key,user_id uuid not null,args jsonb not null,result jsonb not null,created_at timestamptz not null default now());
+create table if not exists public.kp_v8_events(id uuid primary key,title text not null,kind text not null,sides jsonb not null,closes_at timestamptz not null,status text not null default 'open',winner integer,budget bigint not null,liability bigint not null default 0,created_at timestamptz not null default now());
+create table if not exists public.kp_v8_bets(id uuid primary key,user_id uuid not null,event_id uuid not null references public.kp_v8_events(id),side integer not null,stake bigint not null,payout bigint not null,status text not null default 'pending');
+alter table public.kp_v8_casino_accounts enable row level security;
+alter table public.kp_v8_casino_ops enable row level security;
+alter table public.kp_v8_events enable row level security;
+alter table public.kp_v8_bets enable row level security;
+revoke all on public.kp_v8_casino_accounts,public.kp_v8_casino_ops,public.kp_v8_events,public.kp_v8_bets from anon,authenticated;
+create or replace function public.kp_v8_random(n integer) returns integer language plpgsql volatile security definer set search_path='' as $$
+declare b bytea; v bigint; lim bigint;
+begin
+ if n<1 or n>1000000 then raise exception 'Invalid random range'; end if;
+ lim:=4294967296-(4294967296%n);
+ loop
+ b:=extensions.gen_random_bytes(4);
+ v:=get_byte(b,0)::bigint*16777216+get_byte(b,1)::bigint*65536+get_byte(b,2)::bigint*256+get_byte(b,3);
+ exit when v<lim;
+ end loop;
+ return (v%n)::integer;
+end; $$;
+-- Internal helper; call only while holding the users root lock. All changes
+-- enter the protected ledger and refresh the compatibility profile balance.
+create or replace function public.kp_v8_money(n text,delta bigint,op uuid,kind text,details jsonb default '{}') returns bigint language plpgsql security definer set search_path='' as $$
+declare uid uuid; bal bigint; d jsonb;
+begin
+ if delta is null or op is null or n is null then raise exception 'Invalid financial operation';end if;
+ select user_id into uid from public.kp_profiles where nickname=n;
+ if uid is null then raise exception 'Account missing'; end if;
+ select balance into bal from public.kp_wallets where user_id=uid for update;
+ if bal is null or bal+delta<0 or bal+delta>1000000000 then raise exception 'Insufficient funds or balance limit'; end if;
+ if exists(select 1 from public.kp_ledger where operation_id=op) then raise exception 'Duplicate financial operation'; end if;
+ update public.kp_wallets set balance=balance+delta,updated_at=now() where user_id=uid;
+ insert into public.kp_ledger(operation_id,user_id,account,amount,kind,details) values(op,uid,'wallet',delta,kind,details);
+ select document into d from public.kp_tree_roots where branch='users' for update;
+ perform public.kp_v8_put('users',jsonb_set(d,array[n,'balance'],to_jsonb(bal+delta),true));
+ return bal+delta;
+end; $$;
+create or replace function public.kp_casino_v8(p_action text,p_id uuid default null,p_amount bigint default 0,p_game text default null,p_choice text default null) returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor(); u jsonb; c public.kp_v8_casino_accounts%rowtype; old public.kp_v8_casino_ops%rowtype; args jsonb; result jsonb; payout bigint:=0; outcome jsonb; x integer; y integer; z integer; main bigint; today date:=(now() at time zone 'Europe/Moscow')::date;
+begin
+ if a is null then raise exception 'Authentication required'; end if;
+ select document->a into u from public.kp_tree_roots where branch='users' for update;
+ insert into public.kp_v8_casino_accounts(user_id,day) values(auth.uid(),today) on conflict do nothing;
+ select * into c from public.kp_v8_casino_accounts where user_id=auth.uid() for update;
+ select balance into main from public.kp_wallets where user_id=auth.uid();
+ if c.day is distinct from today then c.day:=today;c.deposits:=0;c.wagers:=0; end if;
+ if p_action='view' then return jsonb_build_object('balance',c.balance,'main',main,'dailyWagerRemaining',greatest(0,20000-c.wagers)); end if;
+ if p_action not in ('deposit','withdraw','play') or p_id is null then raise exception 'Invalid operation'; end if;
+ args:=jsonb_build_object('action',p_action,'amount',p_amount,'game',p_game,'choice',p_choice);
+ select * into old from public.kp_v8_casino_ops where id=p_id;
+ if found then
+   if old.user_id<>auth.uid() or old.args<>args then raise exception 'Request identifier mismatch'; end if;
+   return old.result;
+ end if;
+ if coalesce(u->>'accountFrozen','false')='true' or coalesce(u->>'accountVerified','false')<>'true' or coalesce(u->'roles'->>'migrant','false')='true' then raise exception 'Verified active account required'; end if;
+ if p_amount is null or p_amount<1 or p_amount>10000 then raise exception 'Amount must be between 1 and 10000'; end if;
+ if p_action='deposit' then
+   if c.deposits+p_amount>10000 then raise exception 'Daily deposit limit: 10000'; end if;
+   main:=public.kp_v8_money(a,-p_amount,p_id,'casino_deposit'); c.balance:=c.balance+p_amount; c.deposits:=c.deposits+p_amount;
+ elsif p_action='withdraw' then
+   if c.balance<p_amount then raise exception 'Insufficient casino balance'; end if;
+   main:=public.kp_v8_money(a,p_amount,p_id,'casino_withdraw'); c.balance:=c.balance-p_amount;
+ else
+   if p_amount>1000 or c.wagers+p_amount>20000 then raise exception 'Stake limit: 1000; daily turnover: 20000'; end if;
+   if c.balance<p_amount then raise exception 'Insufficient casino balance'; end if;
+   if c.last_round>clock_timestamp()-interval '2 seconds' then raise exception 'Wait for the current round'; end if;
+   if p_game='roulette' then
+     if p_choice is null or p_choice not in ('red','black','zero') then raise exception 'Select a roulette field'; end if;
+     x:=public.kp_v8_random(37); outcome:=to_jsonb(x);
+     if (p_choice='zero' and x=0) then payout:=p_amount*36;
+     elsif x>0 and ((p_choice='red' and x=any(array[1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36])) or (p_choice='black' and not(x=any(array[1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36])))) then payout:=p_amount*2; end if;
+   elsif p_game='dice' then
+     if coalesce(p_choice,'') !~ '^[1-6]$' then raise exception 'Choose 1 to 6'; end if;
+     x:=public.kp_v8_random(6)+1;outcome:=to_jsonb(x);if x=p_choice::integer then payout:=floor(p_amount*5.7);end if;
+   elsif p_game='slots' then
+     x:=public.kp_v8_random(6);y:=public.kp_v8_random(6);z:=public.kp_v8_random(6);outcome:=jsonb_build_array(x,y,z);
+     if x=y and y=z then payout:=p_amount*12;elsif x=y or y=z or x=z then payout:=floor(p_amount*1.5);end if;
+   elsif p_game='wheel' then
+     x:=public.kp_v8_random(20);y:=case when x<11 then 0 when x<16 then 1 when x<18 then 2 else 5 end;outcome:=to_jsonb(y);payout:=p_amount*y;
+   else raise exception 'Unknown game'; end if;
+   c.balance:=c.balance-p_amount+payout;c.wagers:=c.wagers+p_amount;c.last_round:=clock_timestamp();
+ end if;
+ update public.kp_v8_casino_accounts set balance=c.balance,day=c.day,deposits=c.deposits,wagers=c.wagers,last_round=c.last_round where user_id=auth.uid();
+ result:=jsonb_build_object('id',p_id,'balance',c.balance,'main',main,'outcome',outcome,'payout',payout,'stake',p_amount,'game',p_game);
+ insert into public.kp_v8_casino_ops(id,user_id,args,result) values(p_id,auth.uid(),args,result);
+ return result;
+end; $$;
+create or replace function public.kp_events_v8(p_action text,p_id uuid default null,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor(); e public.kp_v8_events%rowtype; bet public.kp_v8_bets%rowtype; n text; sides jsonb; side integer; stake bigint; pay bigint; total bigint:=0; winning_side integer; arr jsonb; item jsonb; u jsonb;
+begin
+ if a is null then raise exception 'Authentication required'; end if;
+ if p_action='view' then
+   select coalesce(jsonb_agg(to_jsonb(t) order by t.created_at desc),'[]') into arr from (select * from public.kp_v8_events order by created_at desc limit 100)t;
+   return jsonb_build_object('events',arr,'bets',coalesce((select jsonb_agg(to_jsonb(b)) from public.kp_v8_bets b where user_id=auth.uid()),'[]'));
+ end if;
+ select document->a into u from public.kp_tree_roots where branch='users' for update;
+ if p_id is null then raise exception 'Request ID required'; end if;
+ if p_action='create' then
+   if a<>'Кайон' then raise exception 'Mayor access required'; end if;
+   if exists(select 1 from public.kp_v8_events where id=p_id) then return jsonb_build_object('ok',true); end if;
+   sides:=p_data->'sides';
+   if coalesce(jsonb_typeof(sides),'null')<>'array' or jsonb_array_length(sides) not between 2 and 8 or length(trim(coalesce(p_data->>'title',''))) not between 3 and 120 or p_data->>'kind' not in ('sport','battle') then raise exception 'Invalid event'; end if;
+   for item in select value from jsonb_array_elements(sides) loop
+     if length(trim(coalesce(item->>'name',''))) not between 1 and 80 or item->>'odds' is null or (item->>'odds')::numeric not between 1.01 and 20 then raise exception 'Invalid side or odds'; end if;
+   end loop;
+   stake:=(p_data->>'budget')::bigint;
+   if stake is null or p_data->>'closesAt' is null or stake not between 100 and 100000 or (p_data->>'closesAt')::timestamptz<=now() then raise exception 'Invalid budget or deadline'; end if;
+   perform public.kp_v8_money(a,-stake,p_id,'event_reserve',jsonb_build_object('title',p_data->>'title'));
+   insert into public.kp_v8_events(id,title,kind,sides,closes_at,budget) values(p_id,trim(p_data->>'title'),p_data->>'kind',sides,(p_data->>'closesAt')::timestamptz,stake);
+   return jsonb_build_object('ok',true);
+ end if;
+ if p_action='bet' then
+   select * into bet from public.kp_v8_bets where id=p_id;
+   if found then
+     if bet.user_id<>auth.uid() or bet.event_id<>(p_data->>'event')::uuid or bet.side<>(p_data->>'side')::integer or bet.stake<>(p_data->>'stake')::bigint then raise exception 'Request mismatch'; end if;
+     return to_jsonb(bet);
+   end if;
+   if coalesce(u->>'accountVerified','false')<>'true' or coalesce(u->>'accountFrozen','false')='true' then raise exception 'Verified active account required'; end if;
+   select * into e from public.kp_v8_events where id=(p_data->>'event')::uuid for update;
+   side:=(p_data->>'side')::integer;stake:=(p_data->>'stake')::bigint;
+   if e.id is null or e.status<>'open' or e.closes_at<=now() or side is null or stake is null or side<0 or side>=jsonb_array_length(e.sides) or stake not between 10 and 1000 then raise exception 'Bet unavailable'; end if;
+   if (select count(*) from public.kp_v8_bets where event_id=e.id and user_id=auth.uid())>=10 then raise exception 'Maximum 10 bets per event'; end if;
+   pay:=floor(stake*(e.sides->side->>'odds')::numeric);
+   if e.liability+pay>e.budget+stake then raise exception 'Event payout reserve exhausted'; end if;
+   perform public.kp_v8_money(a,-stake,p_id,'event_bet',jsonb_build_object('event',e.id,'side',side));
+   insert into public.kp_v8_bets(id,user_id,event_id,side,stake,payout) values(p_id,auth.uid(),e.id,side,stake,pay);
+   update public.kp_v8_events set budget=budget+stake,liability=liability+pay where id=e.id;
+ else
+   if a<>'Кайон' or p_action not in ('settle','cancel') then raise exception 'Mayor access required'; end if;
+   select * into e from public.kp_v8_events where id=p_id for update;
+   if e.id is null then raise exception 'Event missing'; end if;
+   if e.status<>'open' then return jsonb_build_object('ok',true,'repeated',true); end if;
+   winning_side:=(p_data->>'winner')::integer;
+   if p_action='settle' and (winning_side is null or winning_side<0 or winning_side>=jsonb_array_length(e.sides) or now()<e.closes_at) then raise exception 'Wait for closing and select winner'; end if;
+   for bet in select * from public.kp_v8_bets where event_id=e.id order by user_id loop
+     pay:=case when p_action='cancel' then bet.stake when bet.side=winning_side then bet.payout else 0 end;
+     if pay>0 then
+       select nickname into n from public.kp_profiles where user_id=bet.user_id;
+       perform public.kp_v8_money(n,pay,(md5(bet.id::text||':result'))::uuid,'event_result',jsonb_build_object('event',e.id));
+       total:=total+pay;
+     end if;
+     update public.kp_v8_bets set status=case when p_action='cancel' then 'refunded' when pay>0 then 'won' else 'lost' end where id=bet.id;
+   end loop;
+   perform public.kp_v8_money(a,e.budget-total,(md5(e.id::text||':remainder'))::uuid,'event_reserve_return');
+   update public.kp_v8_events set status=case when p_action='cancel' then 'cancelled' else 'settled' end,winner=winning_side,budget=0 where id=e.id;
+ end if;
+ return jsonb_build_object('ok',true);
+end; $$;
+revoke all on function public.kp_v8_random(integer),public.kp_v8_money(text,bigint,uuid,text,jsonb) from public,anon,authenticated;
+revoke all on function public.kp_casino_v8(text,uuid,bigint,text,text),public.kp_events_v8(text,uuid,jsonb) from public,anon;
+grant execute on function public.kp_casino_v8(text,uuid,bigint,text,text),public.kp_events_v8(text,uuid,jsonb) to authenticated;
+commit;
+
 
 -- ===== 011_messages_and_management.sql =====
 begin;
@@ -808,6 +646,173 @@ revoke all on function public.kp_message_v8(text,text,text,text,jsonb),public.kp
 grant execute on function public.kp_message_v8(text,text,text,text,jsonb),public.kp_content_v8(text,text,jsonb),public.kp_business_application_v8(text,text,jsonb) to authenticated;
 commit;
 
+
+-- ===== 012_hospital_and_business.sql =====
+begin;
+-- Business balances are independent accounts, backed by their own journal.
+-- Pre-existing balances are retained; missing historical entries are not invented.
+create table if not exists public.kp_v8_business_ledger(
+ id text primary key,biz_id text not null,actor text not null,
+ amount bigint not null,balance_after bigint not null,kind text not null,
+ details jsonb not null default '{}'::jsonb,created_at timestamptz not null default now()
+);
+create index if not exists kp_v8_business_ledger_biz_idx on public.kp_v8_business_ledger(biz_id,created_at desc);
+alter table public.kp_v8_business_ledger enable row level security;
+revoke all on public.kp_v8_business_ledger from public,anon,authenticated;
+create or replace function public.kp_business_statement_v8(p_biz text) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();b jsonb;lines jsonb;
+begin
+ select document->p_biz into b from public.kp_tree_roots where branch='businesses';
+ if a is null or b is null or (a<>b->>'owner' and a<>'Кайон') then raise exception 'Business owner required';end if;
+ select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at desc),'[]') into lines from
+   (select id,biz_id,actor,amount,balance_after,kind,details,created_at from public.kp_v8_business_ledger
+    where biz_id=p_biz order by created_at desc limit 100)e;
+ return jsonb_build_object('balance',coalesce((b->>'balance')::bigint,0),'lines',lines);
+end; $$;
+create or replace function public.kp_hospital_view() returns jsonb language plpgsql stable security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();d jsonb;apps jsonb;assistant_apps jsonb;staff boolean;
+begin
+ if a is null then raise exception 'Authentication required';end if;
+ select document into d from public.kp_tree_roots where branch='hospital';d:=coalesce(d,'{}');
+ staff:=a='Кайон' or public.kp_v8_role(a,'Врач') or public.kp_v8_role(a,'Помощник врача');
+ select coalesce(jsonb_object_agg(key,value),'{}') into apps from jsonb_each(coalesce(d->'appointments','{}')) where staff or value->>'clientNick'=a;
+ select coalesce(jsonb_object_agg(key,value),'{}') into assistant_apps from jsonb_each(coalesce(d->'assistantApplications','{}')) where staff or value->>'from'=a;
+ return jsonb_build_object('services',coalesce(d->'services','{}'),'photos',coalesce(d->'photos','{}'),'appointments',apps,'assistantApplications',assistant_apps,'assistantSalary',case when staff then coalesce(d->'assistantSalary','0') else '0'::jsonb end);
+end; $$;
+create or replace function public.kp_v8_notify(n text,t text,kind text,key text) returns void language plpgsql security definer set search_path='' as $$
+declare d jsonb;at_ms bigint:=(extract(epoch from now())*1000)::bigint;
+begin
+ select document into d from public.kp_tree_roots where branch='users' for update;
+ if d->n is null then return;end if;
+ d:=public.kp_tree_set_deep(d,array[n,'notifications',key],jsonb_build_object('id',key,'text',left(t,500),'type',kind,'read',false,'seen',false,'createdAt',at_ms,'time',to_char(now() at time zone 'Europe/Moscow','HH24:MI')));
+ perform public.kp_v8_put('users',d);
+end; $$;
+create or replace function public.kp_employment_v8(p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();u jsonb;root jsonb;b jsonb;app jsonb;apps jsonb;jobs jsonb;target text;role_id text;role_name text;branch_name text;path text[];limit_jobs integer;at_ms bigint:=(extract(epoch from now())*1000)::bigint;
+begin
+ if a is null or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid employment request';end if;
+ select document into u from public.kp_tree_roots where branch='users' for update;
+ branch_name:=case when p_data->>'kind'='assistant' then 'hospital' else 'bizJobApps' end;
+ insert into public.kp_tree_roots(branch) values(branch_name) on conflict do nothing;
+ select document into root from public.kp_tree_roots where branch=branch_name for update;
+ if branch_name='hospital' then
+   path:=array['assistantApplications',p_id];role_name:='Помощник врача';
+ else
+   select document->(p_data->>'bizId') into b from public.kp_tree_roots where branch='businesses' for update;
+   if b is null or b->>'status'<>'active' then raise exception 'Business unavailable';end if;
+   path:=array[p_data->>'bizId',p_id];
+ end if;
+ app:=root #> path;
+ if p_action='apply' then
+   if app is not null then if app->>'from'=a then return app;else raise exception 'Duplicate application';end if;end if;
+   if coalesce(u->a->>'accountVerified','false')<>'true' or u->a->>'accountFrozen'='true' then raise exception 'Verified active account required';end if;
+   if exists(select 1 from jsonb_each(coalesce(root->path[1],'{}')) e where coalesce(e.value->>'from',e.value->>'applicant')=a and e.value->>'status'='pending') then raise exception 'Application already pending';end if;
+   role_id:=p_data->>'roleId';
+   if branch_name='hospital' then
+     if coalesce((u->a->>'kveScore')::integer,0)<80 then raise exception 'KVE score 80 required';end if;
+   else
+     if b->>'owner'=a or b->'roles'->role_id is null then raise exception 'Select a vacancy';end if;
+     role_name:=b->'roles'->role_id->>'name';
+   end if;
+   app:=jsonb_build_object('id',p_id,'from',a,'applicant',a,'bizId',p_data->>'bizId','roleId',role_id,'roleName',role_name,'text',left(coalesce(p_data->>'text',''),1200),'status','pending','createdAt',at_ms);
+ else
+   if branch_name='hospital' then
+     if not public.kp_v8_role(a,'Врач') then raise exception 'Doctor access required';end if;
+   elsif a is distinct from b->>'owner' and p_action<>'quit' then raise exception 'Business owner required';end if;
+   if p_action in ('approve','reject') then
+     if app is null then raise exception 'Application missing';end if;
+     if app->>'status'<>'pending' then return app;end if;
+     target:=coalesce(app->>'from',app->>'applicant');role_id:=app->>'roleId';role_name:=app->>'roleName';
+   else target:=case when p_action='quit' then a else p_data->>'target' end;end if;
+   jobs:=coalesce(u->target->'employments','[]');
+   if p_action='approve' then
+     limit_jobs:=case when coalesce((u->target->>'subscriptionExpiry')::timestamptz,now())>now() then case u->target->>'subscription' when 'plus' then 3 when 'ultra' then 4 when 'prime' then 5 else 2 end else 2 end;
+     if jsonb_array_length(jobs)>=limit_jobs then raise exception 'Employment limit reached';end if;
+     if branch_name='hospital' then
+       if exists(select 1 from jsonb_each(u)e where public.kp_v8_role(e.key,'Помощник врача')) or coalesce((u->target->>'kveScore')::integer,0)<80 then raise exception 'Assistant unavailable';end if;
+       jobs:=jobs||jsonb_build_array(jsonb_build_object('id','muni_Помощник врача','type','municipal','role','Помощник врача'));
+     else
+       if b->'roles'->role_id is null or b->'employees' ? target or (select count(*) from jsonb_object_keys(coalesce(b->'employees','{}')))>=3+least(100,coalesce((b->'limitBonus'->>'employees')::integer,(b->'limitBonus'->>'employee')::integer,0)) then raise exception 'Vacancy unavailable';end if;
+       b:=public.kp_tree_set_deep(b,array['employees',target],jsonb_build_object('roleId',role_id,'roleName',role_name,'joinedAt',at_ms));
+       jobs:=jobs||jsonb_build_array(jsonb_build_object('id','biz_'||(p_data->>'bizId'),'type','business','bizId',p_data->>'bizId','bizName',b->>'name','role',role_name));
+     end if;
+     u:=jsonb_set(u,array[target],(u->target)||jsonb_build_object('employments',jobs,'displayJob',role_name)||case when branch_name='hospital' then jsonb_build_object('job','Помощник врача') else '{}'::jsonb end);
+   elsif p_action in ('fire','quit') and branch_name<>'hospital' then
+     if b->'employees'->target is null then raise exception 'Employee missing';end if;
+     b:=b #- array['employees',target];
+     select coalesce(jsonb_agg(value),'[]') into jobs from jsonb_array_elements(jobs) where value->>'bizId' is distinct from p_data->>'bizId';
+     u:=jsonb_set(u,array[target],(u->target)||jsonb_build_object('employments',jobs,'displayJob',coalesce(jobs->0->>'role','Житель'),'employerBizId',null));
+   elsif p_action<>'reject' then raise exception 'Unsupported employment action';end if;
+   if p_action<>'reject' then perform public.kp_v8_put('users',u);end if;
+   if branch_name<>'hospital' then
+     select document into apps from public.kp_tree_roots where branch='businesses';perform public.kp_v8_put('businesses',jsonb_set(apps,array[p_data->>'bizId'],b));
+   end if;
+   app:=coalesce(app,'{}')||jsonb_build_object('status',case when p_action='approve' then 'approved' when p_action='reject' then 'rejected' else 'closed' end,'reviewedAt',at_ms);
+   perform public.kp_v8_notify(target,'Заявка на работу: '||case when p_action='approve' then 'одобрена' when p_action='reject' then 'отклонена' else 'работа завершена' end,'system','employment_'||p_id||p_action);
+ end if;
+ if p_action='apply' then
+   if branch_name='hospital' then select key into target from jsonb_each(u)e where public.kp_v8_role(e.key,'Врач') order by key limit 1;else target:=b->>'owner';end if;
+   perform public.kp_v8_notify(target,'Новая заявка на работу от '||a,'system','employment_'||p_id);
+ end if;
+ root:=public.kp_tree_set_deep(root,path,app);perform public.kp_v8_put(branch_name,root);return app;
+end; $$;
+create or replace function public.kp_business_order_v8(p_action text,p_id text,p_data jsonb default '{}') returns jsonb language plpgsql security definer set search_path='' as $$
+declare a text:=public.kp_v8_actor();u jsonb;b jsonb;root jsonb;o jsonb;items jsonb:='[]';entry record;product jsonb;qty integer;total bigint:=0;owner text;at_ms bigint:=(extract(epoch from now())*1000)::bigint;bid text:=p_data->>'bizId';biz_root jsonb;biz_balance bigint;
+begin
+ if a is null or length(coalesce(p_id,'')) not between 8 and 100 then raise exception 'Invalid order';end if;
+ select document into u from public.kp_tree_roots where branch='users' for update;
+ select document->bid into b from public.kp_tree_roots where branch='businesses' for update;
+ if b is null then raise exception 'Business missing';end if;owner:=b->>'owner';
+ insert into public.kp_tree_roots(branch) values('bizOrders') on conflict do nothing;
+ select document into root from public.kp_tree_roots where branch='bizOrders' for update;o:=root->bid->p_id;
+ if p_action='create' then
+   if o is not null then if o->>'client'=a then return o;else raise exception 'Request mismatch';end if;end if;
+   if b->>'status'<>'active' or owner=a or coalesce(u->a->>'accountVerified','false')<>'true' or u->a->>'accountFrozen'='true' then raise exception 'Purchase unavailable';end if;
+   if coalesce(jsonb_typeof(p_data->'cart'),'null')<>'object' or (select count(*) from jsonb_object_keys(p_data->'cart')) not between 1 and 30 then raise exception 'Invalid cart';end if;
+   for entry in select key,value from jsonb_each(p_data->'cart') loop
+     qty:=(entry.value#>>'{}')::integer;product:=b->'products'->entry.key;
+     if qty is null or qty not between 1 and 20 or product is null or product->>'available'='false' or product->>'price' is null or (product->>'price')::numeric not between 1 and 100000 then raise exception 'Product unavailable';end if;
+     total:=total+qty*(product->>'price')::bigint;
+     items:=items||jsonb_build_array(jsonb_build_object('productId',entry.key,'name',product->>'name','qty',qty,'price',(product->>'price')::bigint,'total',qty*(product->>'price')::bigint));
+   end loop;
+   if total>100000 then raise exception 'Order limit 100000';end if;
+   perform public.kp_v8_money(a,-total,(md5(p_id||':biz-reserve'))::uuid,'business_order_reserve',jsonb_build_object('bizId',bid));
+   o:=jsonb_build_object('id',p_id,'bizId',bid,'bizName',b->>'name','client',a,'clientNick',a,'owner',owner,'items',items,'total',total,'amount',total,'status','paid_waiting_receipt','escrowAmount',total,'clientConfirmed',false,'ownerConfirmed',false,'createdAt',at_ms);
+ elsif p_action='confirm' then
+   if o is null or (a is distinct from o->>'client' and a<>owner and b->'employees'->a is null) then raise exception 'Order participant or employee required';end if;
+   if o->>'status'='completed' then return o;end if;
+   if o->>'status'<>'paid_waiting_receipt' then raise exception 'Invalid order state';end if;
+   o:=o||case when a=o->>'client' then '{"clientConfirmed":true}'::jsonb else '{"ownerConfirmed":true}'::jsonb end;
+   if o->>'ownerConfirmed'='true' and o->>'clientConfirmed'='true' then
+     -- Both parties confirmed: credit the business account atomically.
+     select document into biz_root from public.kp_tree_roots where branch='businesses' for update;
+     b:=biz_root->bid;biz_balance:=coalesce((b->>'balance')::bigint,0)+(o->>'escrowAmount')::bigint;
+     if biz_balance>1000000000 then raise exception 'Business account limit';end if;
+     b:=b||jsonb_build_object('balance',biz_balance);
+     perform public.kp_v8_put('businesses',jsonb_set(biz_root,array[bid],b));
+     insert into public.kp_v8_business_ledger(id,biz_id,actor,amount,balance_after,kind,details)
+       values('order:'||bid||':'||p_id,bid,a,(o->>'escrowAmount')::bigint,biz_balance,'sale',jsonb_build_object('client',o->>'client','orderId',p_id));
+     o:=o||jsonb_build_object('status','completed','escrowAmount',0,'payoutDone',true,'paidAt',at_ms);
+   end if;
+ elsif p_action='cancel' then
+   if o is null or a is distinct from o->>'client' then raise exception 'Client required';end if;
+   if o->>'status'='cancelled' then return o;end if;
+   if o->>'status'<>'paid_waiting_receipt' or o->>'ownerConfirmed'='true' then raise exception 'Order already handed over';end if;
+   perform public.kp_v8_money(a,(o->>'escrowAmount')::bigint,(md5(p_id||':biz-refund'))::uuid,'business_order_refund');o:=o||'{"status":"cancelled","escrowAmount":0}';
+ else raise exception 'Unknown order action';end if;
+ root:=public.kp_tree_set_deep(root,array[bid,p_id],o);perform public.kp_v8_put('bizOrders',root);
+ perform public.kp_v8_notify(case when a=owner then o->>'client' else owner end,'Заказ в «'||(b->>'name')||'»: '||case when p_action='create' then 'новый заказ' when p_action='cancel' then 'отменён' else 'получение подтверждено' end,'system','bizorder_'||p_id||p_action||a);
+ return o;
+end; $$;
+revoke all on function public.kp_v8_notify(text,text,text,text) from public,anon,authenticated;
+revoke all on function public.kp_business_statement_v8(text) from public,anon;
+grant execute on function public.kp_business_statement_v8(text) to authenticated;
+revoke all on function public.kp_employment_v8(text,text,jsonb),public.kp_business_order_v8(text,text,jsonb) from public,anon;
+grant execute on function public.kp_employment_v8(text,text,jsonb),public.kp_business_order_v8(text,text,jsonb) to authenticated;
+commit;
+
+
 -- ===== 013_civic_and_finance.sql =====
 begin;
 create table if not exists public.kp_v8_finance_ops(id uuid primary key,actor text not null,args jsonb not null,result jsonb not null,created_at timestamptz default now());
@@ -975,6 +980,7 @@ revoke all on function public.kp_business_payroll_v8(text) from public,anon;
 grant execute on function public.kp_business_payroll_v8(text) to authenticated;
 commit;
 
+
 -- ===== 014_rentals_and_access.sql =====
 -- Additional protected rental operations. Requires migrations 001-013.
 begin;
@@ -1051,6 +1057,7 @@ end; $$;
 revoke all on function public.kp_rental_v8(text,uuid,text),public.kp_license_status(text) from public,anon;
 grant execute on function public.kp_rental_v8(text,uuid,text),public.kp_license_status(text) to authenticated;
 commit;
+
 
 -- ===== 015_subscriptions_and_news.sql =====
 -- Kapani v10: subscriptions and news must never mutate protected roots from JS.
@@ -1251,6 +1258,7 @@ grant execute on function public.kp_subscription_v10(text,uuid,text,text),
  public.kp_news_v10(text,text,text,jsonb) to authenticated;
 commit;
 
+
 -- ===== 016_profile_plus_frames.sql =====
 -- Kapani 016. Apply manually after 001–015. Does not touch balances or users.
 -- Keep the secure profile allowlist, but honour the Plus avatar frames that
@@ -1350,6 +1358,7 @@ end;
 $$;
 revoke all on function public.kp_profile_patch(jsonb) from public,anon;
 grant execute on function public.kp_profile_patch(jsonb) to authenticated;
+
 
 -- ===== 017_dm_previews_and_education_close.sql =====
 -- Kapani 017. Additive and idempotent. Apply after 001-016 yourself.
@@ -1456,3 +1465,260 @@ revoke all on function public.kp_education_close_v13(text,text) from public,anon
 grant execute on function public.kp_education_close_v13(text,text) to authenticated;
 
 commit;
+
+
+-- ===== 018_profile_savings_and_receipts.sql =====
+-- Kapani 14. Apply manually, after 017. No old savings interest is backpaid.
+-- This file does not access the database until the owner explicitly runs it.
+begin;
+
+-- The legacy user-tree bridge denies direct writes to paid cosmetics. Keep that
+-- protection and offer a narrowly validated server operation instead.
+create or replace function public.kp_profile_customization_v14(p_settings jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare
+  actor text; whole jsonb; profile jsonb; rev bigint; tier int:=0;
+  member_until timestamptz; membership text;
+  prop text; choice text; required_tier int; allowed text[];
+  image text;
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  select nickname into actor from public.kp_profiles where user_id=auth.uid();
+  if actor is null then raise exception 'Profile missing'; end if;
+  if p_settings is null or jsonb_typeof(p_settings)<>'object' or length(p_settings::text)>250000 then
+    raise exception 'Invalid customization payload';
+  end if;
+  if exists(select 1 from jsonb_object_keys(p_settings) as item(key)
+    where item.key <> all(array[
+      'nicknameEmoji','avatarFrame','profileBgEffect','profileCustomBg','chatBubbleStyle'
+    ]::text[])) then
+    raise exception 'Unsupported customization field';
+  end if;
+
+  select document,revision into whole,rev from public.kp_tree_roots
+    where branch='users' for update;
+  profile:=whole->actor;
+  if profile is null then raise exception 'Profile missing'; end if;
+  membership:=coalesce(profile->>'subscription','');
+  member_until:=coalesce(nullif(profile->>'subscriptionExpiry','')::timestamptz,
+    now()-interval '1 day');
+  if member_until>now() then
+    tier:=case membership when 'plus' then 1 when 'ultra' then 2 when 'prime' then 3 else 0 end;
+  end if;
+  if tier=0 then raise exception 'Active Plus subscription required'; end if;
+
+  foreach prop in array array['avatarFrame','profileBgEffect','chatBubbleStyle'] loop
+    if p_settings ? prop then
+      choice:=coalesce(p_settings->>prop,'');
+      required_tier:=0;
+      if prop='avatarFrame' then
+        allowed:=array['gold','pulse','neon','ice','forest_moss','nature_meadow'];
+        if choice=any(array['rainbow','glow','fire','crystal','rose','plasma','thunder',
+                            'hologram','dragon','forest_dusk','nature_aurora','wild_ember'])
+        then required_tier:=2;
+        elsif choice=any(array['prime','wild_storm']) then required_tier:=3;
+        end if;
+      elsif prop='profileBgEffect' then
+        allowed:=array['shimmer','particles','ocean','sunset','forest_moss','nature_meadow'];
+        if choice=any(array['gradient','aurora','galaxy','fire','plasma','thunder',
+                            'hologram','dragon','forest_dusk','nature_aurora','wild_ember'])
+        then required_tier:=2;
+        elsif choice=any(array['prime','wild_storm','custom']) then required_tier:=3;
+        end if;
+      else
+        allowed:=array['gold','ocean','sunset','neon','forest_moss','nature_meadow'];
+        if choice=any(array['rainbow','aurora','galaxy','fire','rose',
+                            'forest_dusk','nature_aurora','wild_ember'])
+        then required_tier:=2;
+        elsif choice=any(array['prime','wild_storm']) then required_tier:=3;
+        end if;
+      end if;
+      if choice<>'' and choice<>all(allowed) and required_tier=0 then
+        raise exception 'Unknown customization style';
+      end if;
+      if greatest(1,required_tier)>tier then
+        raise exception 'This style requires a higher subscription';
+      end if;
+      profile:=jsonb_set(profile,array[prop],
+        case when choice='' then 'null'::jsonb else to_jsonb(choice) end,true);
+    end if;
+  end loop;
+  if p_settings ? 'nicknameEmoji' then
+    choice:=coalesce(p_settings->>'nicknameEmoji','');
+    if length(choice)>12 or choice ~ '[[:cntrl:]]' then
+      raise exception 'Invalid nickname symbol';
+    end if;
+    profile:=jsonb_set(profile,'{nicknameEmoji}',
+      case when choice='' then 'null'::jsonb else to_jsonb(choice) end,true);
+  end if;
+  if p_settings ? 'profileCustomBg' then
+    image:=p_settings->>'profileCustomBg';
+    if tier<3 or coalesce(profile->>'profileBgEffect','')<>'custom'
+      or image is null or length(image)>240000
+      or image !~ '^data:image/jpeg;base64,[A-Za-z0-9+/=]+$' then
+      raise exception 'Prime custom profile background required';
+    end if;
+    profile:=jsonb_set(profile,'{profileCustomBg}',to_jsonb(image),true);
+  end if;
+  if profile->>'profileBgEffect'='custom' and
+    coalesce(profile->>'profileCustomBg','')='' then
+    raise exception 'Choose a background image first';
+  end if;
+
+  whole:=jsonb_set(whole,array[actor],profile,true);
+  update public.kp_tree_roots set document=whole,revision=rev+1,updated_at=now()
+    where branch='users';
+  insert into public.kp_tree_revisions(branch,revision) values('users',rev+1)
+    on conflict(branch) do update set revision=excluded.revision;
+  return jsonb_build_object('ok',true);
+end;
+$$;
+revoke all on function public.kp_profile_customization_v14(jsonb) from public,anon;
+grant execute on function public.kp_profile_customization_v14(jsonb) to authenticated;
+
+-- 0.3% after every full 24-hour interval, with compound interest. Remainders
+-- below 1 ruble carry forward, so small accounts are not rounded to zero forever.
+-- The *new* accrual clock starts on first v14 use. Old unearned periods do not
+-- produce a windfall. Neither the browser nor a user can edit the clock.
+create or replace function public.kp_savings_math_v14(p_profile jsonb,p_now_ms bigint)
+returns jsonb language plpgsql immutable set search_path='' as $$
+declare
+  clock_ms bigint; days bigint; savings bigint; earned bigint:=0;
+  per_day bigint; n bigint; carry numeric; due numeric;
+begin
+  clock_ms:=least(p_now_ms,greatest(0,
+    coalesce((p_profile->>'savingsAccrualV14At')::bigint,p_now_ms)));
+  days:=least(3650,greatest(0,(p_now_ms-clock_ms)/86400000));
+  savings:=greatest(0,coalesce((p_profile->>'savingsBalance')::bigint,0));
+  carry:=greatest(0,least(.999999,
+    coalesce((p_profile->>'savingsInterestCarryV14')::numeric,0)));
+  if days>0 then
+    for n in 1..days loop
+      if savings>=1000000000 then carry:=0; exit; end if;
+      due:=savings*0.003+carry;
+      per_day:=least(1000000000-savings,floor(due)::bigint);
+      savings:=savings+per_day;
+      earned:=earned+per_day;
+      carry:=case when savings>=1000000000 then 0 else due-per_day end;
+    end loop;
+  end if;
+  p_profile:=jsonb_set(p_profile,'{savingsBalance}',to_jsonb(savings),true);
+  p_profile:=jsonb_set(p_profile,'{savingsAccrualV14At}',
+    to_jsonb(clock_ms+days*86400000),true);
+  p_profile:=jsonb_set(p_profile,'{savingsInterestCarryV14}',to_jsonb(carry),true);
+  return jsonb_build_object('profile',p_profile,'savingsBalance',savings,
+    'credited',earned,'days',days,'rate',0.003);
+end;
+$$;
+revoke all on function public.kp_savings_math_v14(jsonb,bigint) from public,anon,authenticated;
+
+create or replace function public.kp_savings_accrue_v14()
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare
+  actor text; whole jsonb; profile jsonb; outcome jsonb; rev bigint;
+  ms bigint; earned bigint;
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  select nickname into actor from public.kp_profiles where user_id=auth.uid();
+  if actor is null then raise exception 'Profile missing'; end if;
+  select document,revision into whole,rev from public.kp_tree_roots
+    where branch='users' for update;
+  profile:=whole->actor;
+  if profile is null then raise exception 'Profile missing'; end if;
+  ms:=floor(extract(epoch from clock_timestamp())*1000)::bigint;
+  outcome:=public.kp_savings_math_v14(profile,ms);
+  earned:=(outcome->>'credited')::bigint;
+  if not profile ? 'savingsAccrualV14At' or (outcome->>'days')::bigint>0 then
+    whole:=jsonb_set(whole,array[actor],outcome->'profile',true);
+    update public.kp_tree_roots set document=whole,revision=rev+1,updated_at=now()
+      where branch='users';
+    insert into public.kp_tree_revisions(branch,revision) values('users',rev+1)
+      on conflict(branch) do update set revision=excluded.revision;
+    if earned>0 then
+      insert into public.kp_ledger(operation_id,user_id,account,amount,kind,details)
+        values(gen_random_uuid(),auth.uid(),'savings',earned,'savings_interest',
+          jsonb_build_object('days',(outcome->>'days')::bigint,'dailyRate',0.003));
+    end if;
+  end if;
+  return outcome-'profile'||jsonb_build_object('ok',true);
+end;
+$$;
+revoke all on function public.kp_savings_accrue_v14() from public,anon;
+grant execute on function public.kp_savings_accrue_v14() to authenticated;
+
+-- Every deposit/withdrawal accrues first while holding the same profile lock.
+-- This blocks the race between withdrawal and the daily payout, and preserves
+-- the pre-existing idempotency, wallet limits and savings ledger entry.
+create or replace function public.kp_savings_move(
+  p_direction text,p_amount bigint,p_request_id uuid
+) returns jsonb language plpgsql security definer set search_path='' as $$
+declare
+  nick text; root_doc jsonb; profile jsonb; rev bigint;
+  balance_now bigint; savings bigint; movement bigint; outcome jsonb;
+  earned bigint; day_count bigint; ms bigint;
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  select nickname into nick from public.kp_profiles where user_id=auth.uid();
+  if nick is null then raise exception 'Profile missing'; end if;
+  if p_direction not in ('deposit','withdraw') or p_request_id is null or
+    p_amount is null or p_amount<=0 or p_amount>1000000 then
+    raise exception 'Invalid savings request';
+  end if;
+  insert into public.kp_tree_roots(branch) values('users') on conflict do nothing;
+  select document,revision into root_doc,rev from public.kp_tree_roots
+    where branch='users' for update;
+  profile:=root_doc->nick;
+  if profile is null then raise exception 'Profile missing'; end if;
+  select balance into balance_now from public.kp_wallets
+    where user_id=auth.uid() for update;
+  if balance_now is null then raise exception 'Wallet missing'; end if;
+  if exists(select 1 from public.kp_ledger where operation_id=p_request_id) then
+    return jsonb_build_object('ok',true,'repeated',true,'balance',balance_now,
+      'savingsBalance',greatest(0,coalesce((profile->>'savingsBalance')::bigint,0)));
+  end if;
+  ms:=floor(extract(epoch from clock_timestamp())*1000)::bigint;
+  outcome:=public.kp_savings_math_v14(profile,ms);
+  profile:=outcome->'profile';
+  savings:=(outcome->>'savingsBalance')::bigint;
+  earned:=(outcome->>'credited')::bigint;
+  day_count:=(outcome->>'days')::bigint;
+
+  if p_direction='deposit' then
+    if coalesce(profile->>'accountFrozen','false')='true' or
+      coalesce(profile->'roles'->>'migrant','false')='true' then
+      raise exception 'Deposits disabled for this account'; end if;
+    if balance_now<p_amount then raise exception 'Insufficient wallet funds'; end if;
+    if savings+p_amount>1000000000 then raise exception 'Savings balance limit'; end if;
+    movement:=-p_amount;savings:=savings+p_amount;
+  else
+    if savings<p_amount then raise exception 'Insufficient savings funds'; end if;
+    if balance_now+p_amount>1000000000 then raise exception 'Wallet balance limit'; end if;
+    movement:=p_amount;savings:=savings-p_amount;
+  end if;
+  balance_now:=balance_now+movement;
+  update public.kp_wallets set balance=balance_now,updated_at=now()
+    where user_id=auth.uid();
+  if earned>0 then
+    insert into public.kp_ledger(operation_id,user_id,account,amount,kind,details)
+      values(gen_random_uuid(),auth.uid(),'savings',earned,'savings_interest',
+        jsonb_build_object('days',day_count,'dailyRate',0.003));
+  end if;
+  insert into public.kp_ledger(operation_id,user_id,account,amount,kind,details)
+    values(p_request_id,auth.uid(),'wallet',movement,'savings_move',
+      jsonb_build_object('direction',p_direction,'savings',savings));
+  profile:=jsonb_set(profile,'{balance}',to_jsonb(balance_now),true);
+  profile:=jsonb_set(profile,'{savingsBalance}',to_jsonb(savings),true);
+  root_doc:=jsonb_set(root_doc,array[nick],profile,true);
+  update public.kp_tree_roots set document=root_doc,revision=rev+1,updated_at=now()
+    where branch='users';
+  insert into public.kp_tree_revisions(branch,revision) values('users',rev+1)
+    on conflict(branch) do update set revision=excluded.revision;
+  return jsonb_build_object('ok',true,'balance',balance_now,
+    'savingsBalance',savings,'interestCredited',earned);
+end;
+$$;
+revoke all on function public.kp_savings_move(text,bigint,uuid) from public,anon;
+grant execute on function public.kp_savings_move(text,bigint,uuid) to authenticated;
+
+commit;
+

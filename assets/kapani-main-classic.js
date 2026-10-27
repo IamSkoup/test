@@ -220,7 +220,7 @@ const WEB_PUSH_VAPID_PUBLIC_KEY = CONFIG.webPushVapidPublicKey;
 // Canonical push backend: direct Web Push through the Cloudflare Worker in push-worker/.
 // Firebase Functions are not part of the push delivery path.
 const PUSH_WORKER_URL = String(CONFIG.pushWorkerUrl || '').trim().replace(/\/+$/,'');
-const KAPANI_BUILD = '2026-09-30-noblaze-worker'; window.KAPANI_BUILD = KAPANI_BUILD;   // shown in the push status line: proves which version a device is running
+const KAPANI_BUILD = 'kapani-v14-2026-10-27'; window.KAPANI_BUILD = KAPANI_BUILD;
 const ECONOMY_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const ECONOMY_ACCOUNT_WEEKLY_FEE = 15;
 const ECONOMY_TRANSFER_COMMISSION = 0.02;
@@ -238,10 +238,11 @@ const ECONOMY_SAVINGS_RATE_TIERS = [
     { max: Infinity, rate: 0.25, label: '25%' }
 ];
 function getSavingsDailyRate(balance){
-    return 0; // Серверное начисление процентов отсутствует.
+    // Показатель справочный. Начисляет деньги исключительно SQL-функция.
+    return 0.003;
 }
 function getSavingsRateLabel(balance){
-    return 'Без процентов — автоматическое начисление не предусмотрено';
+    return '+0,3% в день';
 }
 function getWealthTaxRate(taxBase){
     const amount = Math.max(0, Number(taxBase) || 0);
@@ -539,8 +540,13 @@ function typingChatRef(nick){ return ref(db, `typing/chat/${nick}`); }
 function typingDmRef(key, nick){ return ref(db, `typing/dm/${key}/${nick}`); }
 function safeAvatar(userOrNick, fallback='https://cdn-icons-png.flaticon.com/512/149/149071.png') {
     if(!userOrNick) return fallback;
-    if(typeof userOrNick === 'string') return (allUsersCache[userOrNick]?.avatar) || fallback;
-    return userOrNick.avatar || fallback;
+    const source=typeof userOrNick === 'string'
+        ? (allUsersCache[userOrNick] ? (allUsersCache[userOrNick].avatar||DEFAULT_AVATAR_URL) : fallback)
+        : userOrNick.avatar;
+    // Prefer a fresh profile over a stale avatar embedded in an old message.
+    const candidate=source || fallback;
+    return typeof candidate === 'string' && (/^https:\/\//i.test(candidate) || /^data:image\/(?:jpeg|png|webp|gif);base64,/i.test(candidate))
+        ? candidate : DEFAULT_AVATAR_URL;
 }
 function requestPersistentStorage(){
     try { if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{}); } catch(e) {}
@@ -1253,7 +1259,7 @@ async function processBusinessWeeklyFees(nick, u, opts = {}){
     return false;
 }
 async function processSavingsInterest(nick, u, opts = {}){
-    // Обновлять этот счёт в браузере запрещено. Сервер не платит проценты.
+    // Вся математика накоплений выполняется в kp_savings_accrue_v14 на сервере.
     return u;
 }
 
@@ -1863,8 +1869,15 @@ async function loadAllUsersCache(force=false){
     if(!force && allUsersCacheLoaded) return allUsersCache;
     if(!force && allUsersCachePromise) return allUsersCachePromise;
     allUsersCachePromise = (async()=>{
+        const oldOwn=allUsersCache[currentNick]||{};
         const snap=await get(ref(db,'users'));
         allUsersCache=snap.val()||{};
+        if(currentNick && allUsersCache[currentNick]){
+            // The public users branch intentionally strips private settings.
+            // Do not overwrite the signed-in user's private local state.
+            if(oldOwn.settings && !allUsersCache[currentNick].settings)
+                allUsersCache[currentNick].settings=oldOwn.settings;
+        }
         allUsersCacheLoaded=true;
         window.allUsersCache=allUsersCache;
         if(currentNick && !allUsersCache[currentNick]){
@@ -3941,10 +3954,16 @@ window.saveProfileCustomization=async function(){
     if(bgSelect) updates.profileBgEffect = bgSelect.value || null;
     if(bgSelect?.value === 'custom' && primeCoverPending) updates.profileCustomBg = primeCoverPending;
     if(chatSelect) updates.chatBubbleStyle = chatSelect.value || null;
-    // Preserve previously saved interfaceTheme data without overriding the site theme.
-    try { await update(userRef(currentNick), updates); }
+    // Profile skins have a dedicated authenticated RPC: direct tree writes are
+    // blocked by design and must remain blocked even for paying users.
+    try {
+        const {data,error}=await supabase.rpc('kp_profile_customization_v14',{p_settings:updates});
+        if(error) throw error;
+        if(!data?.ok) throw new Error('Сервер не подтвердил сохранение');
+    }
     catch(err){ toast('Не удалось сохранить фон: '+(err?.message||'ошибка'),'red'); return; }
-    if(allUsersCache[currentNick]) Object.assign(allUsersCache[currentNick], updates);
+    allUsersCache[currentNick]={...(allUsersCache[currentNick]||{}),...updates};
+    updateHeader(allUsersCache[currentNick]);
     // Chat's HTML signature doesn't include style choices, so force a rerender
     // immediately rather than waiting for the next incoming message.
     for(const id of ['chatMessages', 'dmMessages']){
@@ -3952,8 +3971,12 @@ window.saveProfileCustomization=async function(){
     }
     if(typeof renderChat==='function') void renderChat(lastChatMsgs);
     if(typeof renderDmMessages==='function') void renderDmMessages(lastDmMsgs);
-    toast('✅ Настройки сохранены', 'green');
-    void closeProfileCustomizer();
+    primeCoverSaved=primeCoverPending||primeCoverSaved;
+    primeCoverPending='';
+    // The successful save should not immediately trigger a second async read
+    // restoring the old skin from an eventually-consistent client snapshot.
+    qs('profileCustomizerModal')?.remove();
+    toast('Настройки оформления сохранены', 'green');
 };
 
 window.changeAvatarUrl=async function(){
@@ -4059,6 +4082,25 @@ function renderSavingsDisplay(){
     const savings=Number(u.savingsBalance||0);
     if(el) el.textContent=savings.toLocaleString()+' ₽';
     if(rateEl && typeof getSavingsRateLabel==='function') rateEl.textContent=getSavingsRateLabel(savings);
+}
+let savingsAccrualRequest=null;
+async function refreshSavingsFromServer(){
+    if(!currentNick || savingsAccrualRequest)return savingsAccrualRequest;
+    savingsAccrualRequest=(async()=>{
+        const {data,error}=await supabase.rpc('kp_savings_accrue_v14');
+        if(error)throw error;
+        if(!data?.ok)throw new Error('Начисление накоплений не подтверждено');
+        allUsersCache[currentNick]={...(allUsersCache[currentNick]||{}),savingsBalance:Number(data.savingsBalance)};
+        renderSavingsDisplay();
+        if(Number(data.credited)>0){
+            _accountTransactionsCache=null;_accountTransactionsAt=0;
+            void renderRecentTransfers();
+            toast(`Начислено ${Number(data.credited).toLocaleString('ru-RU')} ₽ процентов за ${data.days} дн.`,'green');
+        }
+        return data;
+    })().catch(e=>{console.warn('[savings accrual]',e);toast('Проценты недоступны до установки SQL 018: '+(e?.message||e),'red');return null;})
+      .finally(()=>{savingsAccrualRequest=null;});
+    return savingsAccrualRequest;
 }
 window.editProfileDescription=async function(){
     const snap=await get(userRef(currentNick));
@@ -4852,8 +4894,10 @@ async function renderRecentTransfers(){
     catch(e){console.error('[bank history]',e);el.textContent='Не удалось загрузить историю: '+(e.message||e);return;}
     el.innerHTML=arr.length===0?'<div style="color:var(--muted);font-size:13px;">Нет операций</div>':arr.map(tx=>{
         const whoLine = tx.who ? (tx.type==='in' ? 'От: '+escHtml(tx.who) : '→ '+escHtml(tx.who)) : '';
-        const descLine = tx.desc ? escHtml(tx.desc) : (tx.who ? '' : (tx.type==='in'?'Поступление':'Списание'));
-        const title = [whoLine, descLine].filter(Boolean).join(' · ');
+        const savingsYield = tx.desc === 'savings_interest';
+        const descLine = savingsYield ? 'Начисление 0,3% в день на накопления'
+            : tx.desc ? escHtml(tx.desc) : (tx.who ? '' : (tx.type==='in'?'Поступление':'Списание'));
+        const title = savingsYield ? descLine : [whoLine, descLine].filter(Boolean).join(' · ');
         return `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);"><div style="font-size:20px;">${tx.type==='in'?'💰':'💸'}</div><div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:12px;line-height:1.35;">${title}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${escHtml(tx.date||'')} · ${escHtml(tx.time||'')}</div></div><div style="font-weight:900;font-size:14px;white-space:nowrap;${tx.type==='in'?'color:var(--primary)':'color:var(--red)'};">${tx.type==='in'?'+':'−'}${tx.amt}₽</div></div>`;
     }).join('');
 }
@@ -12094,7 +12138,7 @@ window.renderChat = async function(msgs){
       try {
         const scroll = preserveScrollState(el);
         const entries = Object.entries(lastChatMsgs).sort((a,b)=>(a[1]?.createdAt||0)-(b[1]?.createdAt||0)).slice(-60);
-        const sig = entries.map(([id,m])=>`${id}:${m.createdAt||0}:${m.text||''}:${m.msgType||''}:${m.mediaData?1:0}:${m.edited?1:0}:${JSON.stringify(m.attachments||[])}:${JSON.stringify(m.reactions||{})}:${JSON.stringify(m.reply||{})}`).join('|') + '|r:' + JSON.stringify(chatReadStates||{});
+        const sig = entries.map(([id,m])=>`${id}:${m.createdAt||0}:${m.text||''}:${m.msgType||''}:${m.mediaData?1:0}:${m.edited?1:0}:${JSON.stringify(m.attachments||[])}:${JSON.stringify(m.reactions||{})}:${JSON.stringify(m.reply||{})}:${String(safeAvatar(m.nick,m.avatar)).slice(-80)}`).join('|') + '|r:' + JSON.stringify(chatReadStates||{});
         if(el.dataset.sig === sig && !el.textContent.includes('Загрузка чата...')) return;
         
         // Get current user's chat bubble style
@@ -12263,7 +12307,7 @@ window.renderDmMessages = async function(msgs){
             
             return separator + `<div class="chat-msg ${isMe ? 'me' : ''}" data-msgid="${jsEsc(msgId)}">
                 <div style="position:relative;display:inline-block;">
-                    <img class="chat-av" src="${escHtml(m.avatar||DEFAULT_AVATAR_URL)}" style="cursor:pointer;" loading="lazy" onclick="openImgViewer(this.src)" onerror="this.src='${DEFAULT_AVATAR_URL}'">
+                    <img class="chat-av" src="${escHtml(safeAvatar(m.nick,m.avatar||DEFAULT_AVATAR_URL))}" style="cursor:pointer;" loading="lazy" onclick="openImgViewer(this.src)" onerror="this.onerror=null;this.src='${DEFAULT_AVATAR_URL}'">
                     ${avatarFrameHtml}
                 </div>
                 <div class="chat-msg-body">
@@ -14158,6 +14202,19 @@ function button(label,click,cls='btn btn-primary'){
   return `<button type="button" class="${html(cls)}" onclick="${html(click)}">${html(label)}</button>`;
 }
 async function refreshBalance(){const u=(await get(userRef(currentNick))).val();if(u){allUsersCache[currentNick]=u;updateHeader(u);}return u;}
+async function confirmTransferLedgerV14(operationId){
+  // The server's balance and ledger are committed atomically. Do not display
+  // a final receipt while its operation id is absent from the protected log.
+  for(let retry=0;retry<4;retry++){
+    try{
+      const rows=await getAccountTransactions(true);
+      const match=rows.find(item=>String(item.id)===String(operationId) && item.type==='out');
+      if(match)return match;
+    }catch(e){console.warn('[bank receipt verification]',e);}
+    if(retry<3)await new Promise(resolve=>setTimeout(resolve,350*(retry+1)));
+  }
+  return null;
+}
 window.kpContactMayor=async(text='')=>{window.kpCloseSheet();closeUserProfile?.();navTo('messages');switchMsgTab(1);await openDmChat('Кайон');if(qs('dmInput')){qs('dmInput').value=text;qs('dmInput').focus();}};
 document.querySelectorAll('a,button').forEach(el=>{if(el.textContent.trim().includes('Пройти экзамен')){el.removeAttribute('href');el.removeAttribute('target');el.onclick=e=>{e.preventDefault();window.kpContactMayor('Здравствуйте! Хочу пройти экзамен КВЭ');};}});
 
@@ -14179,7 +14236,29 @@ window.kpSaveSettings=()=>action('settings',async()=>{const settings={...(allUse
 const profile=qs('profile');if(profile){const el=document.createElement('div');el.className='v8-profile-actions';el.innerHTML=button('Настройки профиля','kpProfileSettings()','btn btn-ghost')+button('Изменить оформление','openProfileCustomizer()','btn btn-ghost');profile.querySelector('.profile-header')?.after(el);}applySettings(allUsersCache[currentNick]?.settings);
 
 // A receipt is shown only after a confirmed server response. A retry reuses ID.
-window.doTransfer=()=>action('bank-transfer',async()=>{const name=qs('bTo').value.trim(),amount=Number(qs('bAmt').value);if(!Number.isSafeInteger(amount)||amount<1||amount>1000000)throw new Error('Сумма перевода: от 1 до 1 000 000 ₽');const recipient=await findUserByPublicName(name);if(!recipient)throw new Error('Получатель не найден');const nick=recipient.nick||recipient;if(nick===currentNick)throw new Error('Выберите другого получателя');const key=`bank:${nick}:${amount}`,id=requestID(key);const data=await rpc('kp_bank_transfer',{p_recipient:nick,p_amount:amount,p_request_id:id});if(!data.success)throw new Error('Перевод не подтверждён');v8.requests.delete(key);qs('bTo').value='';qs('bAmt').value='';_accountTransactionsCache=null;_accountTransactionsAt=0;void refreshBalance();void renderRecentTransfers();void renderFinancialStats();void pushNotification(nick,`Перевод ${money(amount)} от ${currentNick}`,'money').catch(console.warn);modal('Перевод выполнен',`<div class="v8-receipt"><div class="v8-success"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M16 33l11 11 23-25"/></svg></div><span class="v8-eyebrow">Капани Банк</span><h2>${money(amount)}</h2><p>Получатель: ${html(typeof recipient==='object'?displayNick(recipient):nick)}</p><dl><dt>Статус</dt><dd>Выполнен</dd><dt>Комиссия</dt><dd>${data.commission!=null?money(data.commission):'Учтена в операции'}</dd><dt>Дата</dt><dd>${new Date().toLocaleString('ru-RU')}</dd><dt>Номер операции</dt><dd class="v8-op-id">${html(id)}</dd></dl>${button('Готово','kpCloseSheet()')}</div>`);});
+window.doTransfer=()=>action('bank-transfer',async()=>{
+  const name=qs('bTo').value.trim(),amount=Number(qs('bAmt').value);
+  if(!Number.isSafeInteger(amount)||amount<1||amount>1000000)throw new Error('Сумма перевода: от 1 до 1 000 000 ₽');
+  const recipient=await findUserByPublicName(name);
+  if(!recipient)throw new Error('Получатель не найден');
+  const nick=recipient.nick||recipient;
+  if(nick===currentNick)throw new Error('Выберите другого получателя');
+  const key=`bank:${nick}:${amount}`,id=requestID(key);
+  const data=await rpc('kp_bank_transfer',{p_recipient:nick,p_amount:amount,p_request_id:id});
+  if(!data.success)throw new Error('Перевод не подтверждён сервером');
+  _accountTransactionsCache=null;_accountTransactionsAt=0;
+  void refreshBalance();
+  const journalRecord=await confirmTransferLedgerV14(id);
+  if(!journalRecord){
+    toast('Сервер принял перевод, но чек пока не подтверждён журналом. Проверьте историю банка.','gold');
+    return;
+  }
+  v8.requests.delete(key);
+  qs('bTo').value='';qs('bAmt').value='';
+  void renderRecentTransfers();void renderFinancialStats();
+  void pushNotification(nick,`Перевод ${money(amount)} от ${currentNick}`,'money').catch(console.warn);
+  modal('Перевод выполнен',`<div class="v8-receipt"><div class="v8-success"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M16 33l11 11 23-25"/></svg></div><span class="v8-eyebrow">Капани Банк</span><h2>${money(amount)}</h2><p>Получатель: ${html(typeof recipient==='object'?displayNick(recipient):nick)}</p><dl><dt>Статус</dt><dd>Подтверждён банковским журналом</dd><dt>Комиссия</dt><dd>${data.commission!=null?money(data.commission):'Учтена в операции'}</dd><dt>Дата</dt><dd>${html(journalRecord.date||new Date().toLocaleDateString('ru-RU'))} ${html(journalRecord.time||'')}</dd><dt>Номер операции</dt><dd class="v8-op-id">${html(id)}</dd></dl>${button('Готово','kpCloseSheet()')}</div>`);
+});
 const bank=qs('bank');if(bank){const card=document.createElement('div');card.className='v8-bank-card';card.innerHTML='<span>Капани Банк</span><div class="v8-eyebrow">Основной счёт</div><strong id="v8BankBalance">—</strong><footer><span>КАПАНИ · ЖИТЕЛЬ</span><span>RUB</span></footer>';bank.prepend(card);}
 
 // Marketplace: compact browse cards, complete detail view, real multi-image input.
@@ -14588,7 +14667,31 @@ window.saveEditNews=id=>action('v10-news-comment-edit',async()=>{
 });
 
 // Navigation hook refreshes balances and stops audio when the casino is left.
-const navV7=window.navTo;window.navTo=function(id,...args){if(id==='shop')id='jobs';if(id!=='casino')casinoAudio.pause();const r=navV7(id,...args);if(id==='adminPage')void action('civic-load',()=>window.kpLoadCivic());if(id==='profile')applySettings(allUsersCache[currentNick]?.settings);if(id==='bank'&&qs('v8BankBalance'))qs('v8BankBalance').textContent=money(allUsersCache[currentNick]?.balance);if(id==='driverPage'&&qs('v8TaxiOnline'))qs('v8TaxiOnline').checked=!!allUsersCache[currentNick]?.settings?.taxiOnline;return r;};
+const navV7=window.navTo;
+window.navTo=function(id,...args){
+  if(id==='shop')id='jobs';
+  if(id!=='casino')casinoAudio.pause();
+  const r=navV7(id,...args);
+  if(id==='adminPage')void action('civic-load',()=>window.kpLoadCivic());
+  if(id==='profile')applySettings(allUsersCache[currentNick]?.settings);
+  if(id==='messages'){
+    // Message payloads can contain an obsolete profile photo. Refresh the
+    // user directory whenever the messenger is opened and repaint avatars.
+    void loadAllUsersCache(true).then(()=>{
+      for(const listId of ['chatMessages','dmMessages']){
+        const list=qs(listId);if(list)delete list.dataset.sig;
+      }
+      if(curPage==='messages' && document.querySelector('#msgPanel0.active'))renderChat(lastChatMsgs);
+      if(curPage==='messages' && currentDmNick)renderDmMessages(lastDmMsgs);
+    }).catch(e=>console.warn('[messenger avatars]',e));
+  }
+  if(id==='bank'){
+    if(qs('v8BankBalance'))qs('v8BankBalance').textContent=money(allUsersCache[currentNick]?.balance);
+    void refreshSavingsFromServer();
+  }
+  if(id==='driverPage'&&qs('v8TaxiOnline'))qs('v8TaxiOnline').checked=!!allUsersCache[currentNick]?.settings?.taxiOnline;
+  return r;
+};
 document.documentElement.dataset.kapaniRevision='11';
 window.KAPANI_V8_READY=true;
 

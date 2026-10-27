@@ -12,6 +12,8 @@ const css = read('assets/kapani-v10.css');
 const subscriptionNews = read('supabase/015_subscriptions_and_news.sql');
 const profileTiers = read('supabase/016_profile_plus_frames.sql');
 const dmAndEducation = read('supabase/017_dm_previews_and_education_close.sql');
+const savingsAndProfile = read('supabase/018_profile_savings_and_receipts.sql');
+const v14css = read('assets/kapani-v14-fixes.css');
 let count = 0;
 const test = (name, condition) => {
   assert.ok(condition, name);
@@ -46,7 +48,9 @@ test('tax uses same four brackets as server', main.includes('if(amount < 1000) r
   read('supabase/003_protected_app_operations.sql').includes('when tax_base<=100000 then 0.17 else 0.25'));
 test('tax preview respects available balance cap', main.includes('const limitedNext = Math.min(Math.max(0,Math.floor(balance)),totalNext)'));
 test('savings actions go through protected server RPC', main.includes("supabase.rpc('kp_savings_move'"));
-test('no fictitious savings interest', main.includes("return 'Без процентов — автоматическое начисление не предусмотрено'"));
+test('0.3% savings supported exclusively by server', main.includes("return '+0,3% в день'") &&
+  main.includes("supabase.rpc('kp_savings_accrue_v14')") &&
+  savingsAndProfile.includes('savings*0.003+carry'));
 test('no unprotected business recurring fee', main.includes('В защищённой экономике нет RPC для этого взноса'));
 test('no client-side advertising salary payout', main.includes('В текущих RPC нет защищённой выплаты рекламщику'));
 test('private license role', sql.includes("raise exception 'Private licence data'"));
@@ -58,12 +62,25 @@ test('message delete requires confirmation', main.includes("confirm('Удали�
 test('album attachments are sent explicitly', main.includes('async function sendDraft'));
 test('history hides but does not delete', extra.includes("sessionStorage.setItem('kp_hide_delivery_history'"));
 test('licences and rental SQL last', sql.includes('014_rentals_and_access.sql'));
-test('revision 13 css loaded with cache buster', index.includes('assets/kapani-v10.css?v=13'));
-test('revision 13 main script cache buster', index.includes('assets/kapani-main-classic.js?v=13'));
+test('revision 14 css loaded after v10 overrides', index.includes('assets/kapani-v10.css?v=13') &&
+  index.includes('assets/kapani-v14-fixes.css?v=14') &&
+  index.indexOf('assets/kapani-v10.css')<index.indexOf('assets/kapani-v14-fixes.css'));
+test('revision 14 main script cache buster', index.includes('assets/kapani-main-classic.js?v=14'));
 test('revision 10 SQL appended to full installer', sql.includes('-- ===== 015_subscriptions_and_news.sql ====='));
 test('installer and individual new migration equivalent', sql.includes(subscriptionNews.trim()));
 test('Plus profile frame fix follows subscription migration', sql.includes('-- ===== 016_profile_plus_frames.sql =====') && sql.includes(profileTiers.trim()));
 test('DM and education migration appended intact', sql.includes('-- ===== 017_dm_previews_and_education_close.sql =====') && sql.includes(dmAndEducation.trim()));
+test('v14 savings and paid profile migration appended intact', sql.includes('-- ===== 018_profile_savings_and_receipts.sql =====') &&
+  sql.includes(savingsAndProfile.trim()));
+test('paid profile settings no longer written through forbidden tree update',
+  main.includes("supabase.rpc('kp_profile_customization_v14'") &&
+  savingsAndProfile.includes('This style requires a higher subscription'));
+test('profile wallpapers override forced green surface',v14css.includes('#profile #profileHeaderBg.profile-header[class*="profile-bg-"]') &&
+  v14css.includes('background:var(--kp-profile-skin'));
+test('toasts remain above lightweight dialogs',v14css.includes('#notifPopup {') &&
+  v14css.includes('z-index:2147483644') && v14css.includes('backdrop-filter:none !important'));
+test('bank receipt waits for journal confirmation',main.includes('const journalRecord=await confirmTransferLedgerV14(id)') &&
+  main.includes("if(!journalRecord){"));
 test('DM index uses actual existing messages', dmAndEducation.includes("root->conv->'messages'") && dmAndEducation.includes("jsonb_build_object('lastTs',ts,'latest',last_message)"));
 test('DM index repair authenticated for participants', dmAndEducation.includes("if a is null or p_peer is null or p_peer=a") && dmAndEducation.includes('public.kp_v8_actor()'));
 test('DM deletion and reindex are atomic in SQL', main.includes("await rpc('kp_dm_delete_v13',{p_peer:peer,p_id:id})") && dmAndEducation.includes("perform public.kp_message_v8('delete','dm',p_peer,p_id") && dmAndEducation.includes('return public.kp_dm_reindex_v13(p_peer)'));

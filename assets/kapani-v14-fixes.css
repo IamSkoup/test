@@ -1,0 +1,132 @@
+/* Rev 14. Keep customization visible, reduce fullscreen GPU work, and never
+   put notification banners behind dialogs. Loaded after the v10 overrides. */
+
+/* v10 forced a green background on .profile-header with !important, which
+   hid ALL purchased profile wallpapers even when the correct class was set. */
+html[data-season] #profile #profileHeaderBg.profile-header[class*="profile-bg-"],
+#profile #profileHeaderBg.profile-header[class*="profile-bg-"] {
+  background:var(--kp-profile-skin,linear-gradient(140deg,#193f2d,#0c2b1c)) !important;
+  background-repeat:no-repeat !important;
+  background-position:center !important;
+  background-size:cover !important;
+  color:#f4f9f0 !important;
+  isolation:isolate;
+}
+#profile #profileHeaderBg.profile-bg-prime,
+#profile #profileHeaderBg.profile-bg-gradient-animated {
+  background-size:320% 100% !important;
+}
+#userProfileModal .user-profile-sheet[class*="profile-bg-"],
+#userProfileModal #upmWallHost[class*="profile-bg-"],
+#vpfProfileBgEffect[class*="profile-bg-"] {
+  background:var(--kp-profile-skin,linear-gradient(130deg,#173d2e,#173528)) !important;
+  background-position:center !important;
+  background-size:cover !important;
+}
+#profile #profileHeaderBg .p-name,
+#profile #profileHeaderBg .p-job,
+#profile #profileHeaderBg #profileDescription {
+  text-shadow:0 2px 8px rgba(0,0,0,.68);
+}
+
+/* Transparent, lightweight scrims: dialogs shouldn't hide notifications. */
+#kpV8Sheet.v8-overlay,
+html.kp-casino-lite #kpV8Sheet.v8-overlay,
+#giftSubModal,
+#passportModal,#passportFormModal,
+#userProfileModal.open,#historyModal.open,
+#profileCustomizerModal > div {
+  background:rgba(2,17,10,.38) !important;
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
+#notifPopup {
+  z-index:2147483644 !important;
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+  box-shadow:0 10px 32px #0007 !important;
+}
+#toasts {
+  z-index:2147483643 !important;
+}
+#toasts .toast {
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
+
+/* The narrow split flex card previously wrapped "на счёте" a letter per line. */
+#bank .kp-savings-summary {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px 24px;
+  min-width:0;
+  margin-bottom:12px;
+  padding:14px 16px;
+  background:var(--surface2);
+  border-radius:var(--r-sm);
+  border:1px solid var(--border);
+}
+#bank .kp-savings-balance {
+  min-width:125px;
+  flex:1 1 125px;
+}
+#bank .kp-savings-balance > div,
+#bank #savingsBalanceDisplay,
+#bank .kp-savings-rate {
+  white-space:nowrap;
+  word-break:normal;
+  overflow-wrap:normal;
+}
+#bank .kp-savings-rate {
+  color:var(--muted);
+  text-align:right;
+  font-size:12px;
+  line-height:1.5;
+  flex:0 0 auto;
+}
+#bank #savingsRateDisplay {
+  color:#a5e1a7;
+  font-weight:850;
+}
+@media (max-width:440px) {
+  #bank .kp-savings-summary {display:block;}
+  #bank .kp-savings-rate {text-align:left;margin-top:8px;}
+}
+
+/* Every message and avatar belongs to the muted forest palette. */
+#chatMessages .chat-av,#dmMessages .chat-av {
+  display:block !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  width:30px;
+  height:30px;
+  min-width:30px;
+  object-fit:cover;
+  background:#335640;
+  border:1px solid rgba(157,203,160,.48);
+}
+html[data-season] #chatMessages .chat-bubble:not([class*="chat-bubble-"]),
+html[data-season] #dmMessages .chat-bubble:not([class*="chat-bubble-"]) {
+  background:linear-gradient(130deg,#213d2f,#1a322a) !important;
+  border:1px solid rgba(136,194,151,.21) !important;
+  color:#eef6e9 !important;
+}
+.chat-bubble-gold { --kp-bubble-skin:linear-gradient(120deg,#4c5137,#70644a);--kp-bubble-border:#a6ab7c; }
+.chat-bubble-rainbow { --kp-bubble-skin:linear-gradient(120deg,#345146,#486e61,#495d70,#52674b);--kp-bubble-border:#a1c1b1; }
+.chat-bubble-ocean { --kp-bubble-skin:linear-gradient(120deg,#245449,#386e69);--kp-bubble-border:#88c4b6; }
+.chat-bubble-sunset { --kp-bubble-skin:linear-gradient(120deg,#4a4735,#76664c,#51664a);--kp-bubble-border:#afab80; }
+.chat-bubble-aurora { --kp-bubble-skin:linear-gradient(120deg,#235c47,#466e60);--kp-bubble-border:#8cbeab; }
+.chat-bubble-galaxy { --kp-bubble-skin:linear-gradient(125deg,#263d46,#364b54,#304b43);--kp-bubble-border:#96b8b6; }
+.chat-bubble-fire { --kp-bubble-skin:linear-gradient(120deg,#544832,#74583a,#36523f);--kp-bubble-border:#b5a47b; }
+.chat-bubble-neon { --kp-bubble-skin:linear-gradient(120deg,#205044,#326c58);--kp-bubble-border:#86c4a2; }
+.chat-bubble-rose { --kp-bubble-skin:linear-gradient(120deg,#45433f,#5d5654,#3c5c4a);--kp-bubble-border:#aaa9a0; }
+.chat-bubble-plasma { --kp-bubble-skin:linear-gradient(125deg,#39485a,#526275,#34584e);--kp-bubble-border:#92b5af; }
+.chat-bubble-thunder { --kp-bubble-skin:linear-gradient(120deg,#3c493b,#627050);--kp-bubble-border:#bec693; }
+.chat-bubble-hologram { --kp-bubble-skin:linear-gradient(120deg,#28574f,#43716a);--kp-bubble-border:#9bc8bb; }
+.chat-bubble-dragon { --kp-bubble-skin:linear-gradient(125deg,#4c4935,#605743,#395345);--kp-bubble-border:#aca381; }
+
+@media (prefers-reduced-motion:reduce) {
+  #profile #profileHeaderBg[class*="profile-bg-"] {animation:none !important;}
+}
