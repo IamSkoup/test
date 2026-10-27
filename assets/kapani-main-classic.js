@@ -346,6 +346,8 @@ let pendingPhotoQueues = { chat: [], dm: [] };
 let vcFacingMode = 'user';
 let chatLoading = false;
 let dmLoading = false;
+let generalChatGeneration = 0;
+let generalChatDeadline = null;
 
 const ROLE_MIGRANT = 'Мигрант';
 function isMigrantUser(u){ return !!(u && u.roles && u.roles.migrant === true); }
@@ -373,6 +375,14 @@ function safeExtFromMime(mime, fallback){
     return map[String(mime).split(';')[0]] || (fallback || 'bin');
 }
 let kapaniActiveMediaUpload = null;
+let messengerMediaGeneration = 0;
+function cancelMediaUpload(reason='Загрузка отменена', onlyMessenger=false){
+    const running=kapaniActiveMediaUpload;
+    if(running && (!onlyMessenger || running.fromMessenger)){
+        try{running.cancel(reason);}catch(e){console.warn('[Kapani media cancel]',e);}
+    }
+    if(!onlyMessenger || !running || running.fromMessenger) hideMediaProgress();
+}
 function mediaProgressUI(label, progress=0){
     let panel=document.getElementById('kpMediaProgress');
     if(!panel){
@@ -381,7 +391,7 @@ function mediaProgressUI(label, progress=0){
         panel.style.cssText='position:fixed;bottom:85px;left:50%;transform:translateX(-50%);z-index:11000;max-width:410px;width:calc(100% - 32px);padding:14px 16px;border:1px solid var(--border);border-radius:17px;background:var(--surface,#10291f);box-shadow:0 14px 38px #0007;color:var(--text)';
         panel.innerHTML='<div id="kpMediaLabel" style="font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div><div style="display:flex;align-items:center;gap:10px;margin-top:10px"><progress id="kpMediaBar" max="100" value="0" style="width:100%;height:10px;accent-color:var(--primary)"></progress><span id="kpMediaPercent" style="font-size:12px;min-width:38px;text-align:right"></span><button id="kpMediaCancel" type="button" style="border:0;color:var(--text);background:transparent;cursor:pointer;font-size:16px" aria-label="Отменить загрузку">×</button></div>';
         document.body.appendChild(panel);
-        panel.querySelector('#kpMediaCancel').onclick=()=>kapaniActiveMediaUpload?.abort?.();
+        panel.querySelector('#kpMediaCancel').onclick=()=>cancelMediaUpload();
     }
     panel.querySelector('#kpMediaLabel').textContent=label;
     panel.querySelector('#kpMediaBar').value=Math.max(0,Math.min(100,progress));
@@ -390,6 +400,8 @@ function mediaProgressUI(label, progress=0){
 function hideMediaProgress(){document.getElementById('kpMediaProgress')?.remove();}
 async function uploadBlobToStorage(blobOrFile,folder){
     if(!(blobOrFile instanceof Blob) || !blobOrFile.size) throw new Error('Файл пуст');
+    const fromMessenger=curPage==='messages';
+    const mediaGeneration=messengerMediaGeneration;
     // Free Supabase projects cap each object at 50MB. Keep a safety margin.
     if(blobOrFile.size>49*1024*1024) throw new Error('Видео превышает лимит Supabase Free (49 МБ)');
     const {data:{session},error:sessionError}=await supabase.auth.getSession();
@@ -399,11 +411,17 @@ async function uploadBlobToStorage(blobOrFile,folder){
     const ext=safeExtFromMime(mime,'bin');
     const objectPath=`${uid}/${folder}/${Date.now()}_${crypto.randomUUID()}.${ext}`;
     const {Upload}=await import('https://cdn.jsdelivr.net/npm/tus-js-client@4.3.1/+esm');
+    if(fromMessenger && (curPage!=='messages'||mediaGeneration!==messengerMediaGeneration)) throw new Error('Загрузка отменена при закрытии мессенджера');
+    if(kapaniActiveMediaUpload) throw new Error('Дождитесь окончания предыдущей загрузки');
     const projectId=new URL(CONFIG.supabase.url).hostname.split('.')[0];
     const label=blobOrFile.name||folder.split('/').at(-1)||'Медиа';
     mediaProgressUI(`Загрузка ${label}`,0);
+    let activeUpload=null;
     try{
         await new Promise((resolve,reject)=>{
+            let settled=false,cancelled=false;
+            const fail=err=>{if(!settled){settled=true;reject(err);}};
+            const done=()=>{if(!settled){settled=true;resolve();}};
             const transfer=new Upload(blobOrFile,{
                 endpoint:`https://${projectId}.storage.supabase.co/storage/v1/upload/resumable`,
                 retryDelays:[0,1000,3000,5000,10000],
@@ -411,22 +429,28 @@ async function uploadBlobToStorage(blobOrFile,folder){
                 uploadDataDuringCreation:true,removeFingerprintOnSuccess:true,
                 chunkSize:6*1024*1024,
                 metadata:{bucketName:'kapani-media',objectName:objectPath,contentType:mime,cacheControl:'3600'},
-                onError:reject,
-                onProgress:(sent,total)=>mediaProgressUI(`Загрузка ${label}`,Math.round(sent/Math.max(total,1)*100)),
-                onSuccess:resolve
+                onError:fail,
+                onProgress:(sent,total)=>{if(!cancelled)mediaProgressUI(`Загрузка ${label}`,Math.round(sent/Math.max(total,1)*100));},
+                onSuccess:done
             });
-            kapaniActiveMediaUpload=transfer;
+            activeUpload={fromMessenger,source:blobOrFile,cancel:(reason)=>{
+                if(cancelled)return;
+                cancelled=true;
+                Promise.resolve(transfer.abort()).catch(e=>console.debug('[Kapani upload abort]',e));
+                fail(new Error(reason||'Загрузка отменена'));
+            }};
+            kapaniActiveMediaUpload=activeUpload;
             transfer.findPreviousUploads().then(previous=>{
+                if(cancelled)return;
                 if(previous.length) transfer.resumeFromPreviousUpload(previous[0]);
                 transfer.start();
-            }).catch(reject);
+            }).catch(fail);
         });
         const {data}=supabase.storage.from('kapani-media').getPublicUrl(objectPath);
         if(!data?.publicUrl) throw new Error('Не удалось получить адрес загруженного файла');
         return data.publicUrl;
     }finally{
-        kapaniActiveMediaUpload=null;
-        hideMediaProgress();
+        if(kapaniActiveMediaUpload===activeUpload){kapaniActiveMediaUpload=null;hideMediaProgress();}
     }
 }
 
@@ -463,6 +487,9 @@ let viewingProfileNick = null;
 let dmPeerReadTs = 0;
 let lastMarketListings = {};
 let dmConvoMeta = {};
+const dmVerifiedPreviews = new Map();
+const dmIndexObservedTs = new Map();
+let dmPreviewRefreshBusy = false;
 let myPinnedChats = {};
 let dmTypingUnsub = null;
 let chatTypingUnsub = null;
@@ -1957,8 +1984,13 @@ function attachOrderService(){
 }
 function attachChatService(){
     removeServiceListener('messages','chat');
+    const generation=++generalChatGeneration;
+    if(generalChatDeadline) clearTimeout(generalChatDeadline);
     const cRef=query(chatRef(),orderByChild('createdAt'),limitToLast(80));
     const cFn=(snap)=>{
+        if(generation!==generalChatGeneration) return;
+        if(generalChatDeadline){clearTimeout(generalChatDeadline);generalChatDeadline=null;}
+        chatLoading=false;
         const data=snap.val()||{};
         const viewingChat=(curPage==='messages'&&document.querySelector('#msgPanel0.active'));
         lastChatMsgs=data;
@@ -1969,16 +2001,37 @@ function attachChatService(){
     };
     // One persistent realtime listener for the open chat service.
     // Re-rendering never creates another Firebase listener.
-    addServiceListener('messages','chat',cRef,cFn);
+    const cError=(err)=>{
+        if(generation!==generalChatGeneration) return;
+        if(generalChatDeadline){clearTimeout(generalChatDeadline);generalChatDeadline=null;}
+        chatLoading=false;
+        console.warn('[Kapani general chat load]',err?.message||err);
+        const host=qs('chatMessages');
+        if(curPage==='messages'&&document.querySelector('#msgPanel0.active')&&host)
+            host.innerHTML='<div class="chat-empty-state">Не получилось загрузить чат. <button type="button" class="btn btn-ghost btn-sm" onclick="kpRetryGeneralChat()">Повторить</button></div>';
+    };
+    addServiceListener('messages','chat',cRef,cFn,cError);
+    // The realtime subscription can be delayed while a previous channel is
+    // being removed. Make a separate bounded read on every re-entry.
+    get(cRef).then(cFn).catch(cError);
+    generalChatDeadline=setTimeout(()=>cError(new Error('Превышено время ожидания сообщений')),12000);
     // General-chat typing presence may still be used internally by voice/video flows,
     // but it is intentionally not rendered as a user-facing typing indicator.
     const dmInboxRef=dmIndexRef(currentNick);
     const dmInboxFn=snap=>{
         const index=snap.val()||{};
         dmConvoMeta={};
-        Object.entries(index).forEach(([peer,meta])=>{dmConvoMeta[peer]={lastTs:Number(meta?.lastTs||0),latest:meta?.latest||null,unread:!!meta?.unread};});
+        Object.entries(index).forEach(([peer,meta])=>{
+            const fromIndex={lastTs:Number(meta?.lastTs||0),latest:meta?.latest||null,unread:!!meta?.unread};
+            dmIndexObservedTs.set(peer,fromIndex.lastTs);
+            const verified=dmVerifiedPreviews.get(peer);
+            dmConvoMeta[peer]=verified&&verified.checkedIndexTs===fromIndex.lastTs
+                ? {...fromIndex,lastTs:verified.lastTs,latest:verified.latest,unread:verified.latest?fromIndex.unread:false}
+                : fromIndex;
+        });
         if(curPage==='messages'&&document.querySelector('#msgPanel1.active'))renderDmUserList(allUsersCache);
         if(curPage==='messages'&&currentDmNick) renderDmMessages(lastDmMsgs);
+        if(curPage==='messages'&&document.querySelector('#msgPanel1.active'))void refreshDmPreviewsFromMessages();
     };
     addServiceListener('messages','dmInbox',dmInboxRef,dmInboxFn);
     const rsRef=ref(db,'readState');
@@ -2033,6 +2086,10 @@ function leaveService(page){
     const mapping={messages:'messages',market:'market',home:'home',tasks:'tasks',driverPage:'orders',deliveryPage:'orders',adminPage:'admin',ratings:'ratings',businesses:'business',bizDetail:'business',bizOwnerPanel:'business',dutyPage:'duty'};
     const service=mapping[page]; if(service) removeAllServiceListeners(service);
     if(page==='messages'){
+        generalChatGeneration++;
+        if(generalChatDeadline){clearTimeout(generalChatDeadline);generalChatDeadline=null;}
+        messengerMediaGeneration++;
+        cancelMediaUpload('Загрузка остановлена при выходе из мессенджера',true);
         window._dmOpenSeq=(window._dmOpenSeq||0)+1;
         if(dmListeners.current?.timeoutId) clearTimeout(dmListeners.current.timeoutId);
         setGeneralChatPresence(false);
@@ -2051,6 +2108,7 @@ function leaveService(page){
     if(page==='dutyPage') stopCallsListener();
     if(page==='hospitalPanel') stopMedicalCallsListener();
 }
+window.kpRetryGeneralChat=function(){if(curPage!=='messages')return;const host=qs('chatMessages');if(host){host.removeAttribute('data-sig');host.innerHTML=loadingHtml('Загрузка чата...');}chatLoading=true;attachChatService();};
 function attachListeners(){
     attachUserListener();
     attachNotificationsListener();
@@ -5113,6 +5171,14 @@ function getPinnedMap(){ return (allUsersCache[currentNick] && allUsersCache[cur
 function isChatPinned(nick){ return !!getPinnedMap()[nick]; }
 function dmPreviewText(msg){
     if(!msg) return 'Новый чат';
+    const album=Array.isArray(msg.attachments)?msg.attachments:[];
+    const attachmentType=album[0]?.type||msg.msgType||'';
+    const speaker=msg.nick===currentNick?'Вы':(displayNick(allUsersCache[msg.nick])||msg.nick);
+    if(album.length&&!String(msg.text||'').trim()){
+        if(attachmentType==='image'||attachmentType==='sticker')return `${speaker}: Фото${album.length>1?' ('+album.length+')':''}`;
+        if(attachmentType==='video'||attachmentType==='video_circle')return `${speaker}: Видео`;
+        if(attachmentType==='voice')return `${speaker}: Голосовое сообщение`;
+    }
     if(msg.msgType==='gift_subscription') return `🎁 ${msg.nick===currentNick ? 'Вы' : (displayNick(allUsersCache[msg.nick]) || msg.nick)}: Подарок подписки`;
     if(msg.msgType==='voice') return `🎤 ${msg.nick===currentNick ? 'Вы' : (displayNick(allUsersCache[msg.nick]) || msg.nick)}: Голосовое сообщение`;
     if(msg.msgType==='video_circle') return `⭕ ${msg.nick===currentNick ? 'Вы' : (displayNick(allUsersCache[msg.nick]) || msg.nick)}: Видеосообщение`;
@@ -5127,6 +5193,29 @@ function latestMessageFrom(messages){
     const arr = Object.values(messages || {});
     if(!arr.length) return null;
     return arr.slice().sort((a,b)=>(a?.createdAt||0)-(b?.createdAt||0)).at(-1) || null;
+}
+async function refreshDmPreviewsFromMessages(force=false){
+    if(dmPreviewRefreshBusy||!currentNick||curPage!=='messages')return;
+    dmPreviewRefreshBusy=true;
+    try{
+        const peers=Object.entries(dmConvoMeta).slice(0,40);
+        for(const [peer,indexMeta] of peers){
+            if(curPage!=='messages')break;
+            const verified=dmVerifiedPreviews.get(peer);
+            const indexedTs=dmIndexObservedTs.get(peer)??Number(indexMeta?.lastTs||0);
+            if(!force&&verified&&verified.checkedIndexTs===indexedTs&&Date.now()-verified.checkedAt<30000)continue;
+            try{
+                const snap=await get(query(dmRef(dmKey(currentNick,peer)),orderByChild('createdAt'),limitToLast(80)));
+                const latest=latestMessageFrom(snap.val()||{});
+                const truth={checkedAt:Date.now(),checkedIndexTs:indexedTs,latest,lastTs:Number(latest?.createdAt||0)};
+                dmVerifiedPreviews.set(peer,truth);
+                if(dmConvoMeta[peer]&&dmIndexObservedTs.get(peer)===indexedTs){
+                    dmConvoMeta[peer]={...dmConvoMeta[peer],latest,lastTs:truth.lastTs,unread:!!latest&&dmConvoMeta[peer].unread};
+                    if(document.querySelector('#msgPanel1.active'))renderDmUserList(allUsersCache);
+                }
+            }catch(err){console.warn('[Kapani DM preview refresh]',peer,err?.message||err);}
+        }
+    }finally{dmPreviewRefreshBusy=false;}
 }
 function updateDmConvoMeta(allDms){
     const meta = {};
@@ -5224,6 +5313,10 @@ window.togglePinChat = async function(nick){
     }
 };
 window.switchMsgTab=function(i){
+    if(kapaniActiveMediaUpload?.fromMessenger && !qs(`msgTab${i}`)?.classList.contains('active')){
+        messengerMediaGeneration++;
+        cancelMediaUpload('Загрузка отменена при переключении чата',true);
+    }
     [0,1].forEach(j=>{const tab=qs(`msgTab${j}`); if(tab) tab.classList.toggle('active',j===i); const panel=qs(`msgPanel${j}`); if(panel) panel.classList.toggle('active',j===i);});
     setGeneralChatPresence(i===0);
     if(i===0){
@@ -5236,6 +5329,7 @@ window.switchMsgTab=function(i){
     }
     if(i===1){
         renderDmContactList(allUsersCache, false);
+        void refreshDmPreviewsFromMessages();
         if(!allUsersCacheLoaded){
             loadAllUsersCache().then(users=>{
                 if(curPage==='messages' && document.querySelector('#msgPanel1.active')) renderDmUserList(users);
@@ -5375,6 +5469,7 @@ window.openDmChat=async function(nick){
     }
 };
 window.closeDmChat=function(){
+    if(kapaniActiveMediaUpload?.fromMessenger){messengerMediaGeneration++;cancelMediaUpload('Диалог закрыт',true);}
     window._dmOpenSeq = (window._dmOpenSeq || 0) + 1;
     if(dmListeners.current){
         try{ if(dmListeners.current.timeoutId) clearTimeout(dmListeners.current.timeoutId); }catch(e){}
@@ -14230,7 +14325,7 @@ const draftKey=kind=>kind==='dm'?'dm:'+currentDmNick:'chat';
 function draft(kind){const key=draftKey(kind);if(!v8.drafts.has(key))v8.drafts.set(key,{id:crypto.randomUUID(),files:[],reply:null,forward:null});return v8.drafts.get(key);}
 function pendingHost(kind){let host=qs('v8Pending_'+kind);if(!host){host=document.createElement('div');host.id='v8Pending_'+kind;host.className='v8-pending';qs(kind==='dm'?'dmInput':'chatInput')?.parentElement?.before(host);}return host;}
 function paintDraft(kind){const host=pendingHost(kind),d=draft(kind);host.innerHTML=`${d.reply?`<div class="v8-reply-draft"><span>Ответ ${html(d.reply.nick)}<small>${html(d.reply.text||'Вложение')}</small></span><button class="v8-icon" onclick="kpClearReply('${kind}')">×</button></div>`:''}${d.forward?`<div class="v8-reply-draft">Пересылаемое сообщение<button class="v8-icon" onclick="kpClearForward('${kind}')">×</button></div>`:''}<div class="v8-pending-files">${d.files.map((f,i)=>`<div>${f.type==='video'?`<video src="${html(f.preview)}" muted playsinline preload="metadata"></video>`:`<img src="${html(f.preview||f.url)}" alt="Вложение">`}<button aria-label="Убрать вложение" onclick="kpRemoveAttachment('${kind}',${i})">×</button></div>`).join('')}</div>${d.files.length?'<small>Вложения будут отправлены вместе с сообщением после нажатия «Отправить».</small>':''}`;}
-window.kpRemoveAttachment=(kind,i)=>{const d=draft(kind),f=d.files.splice(i,1)[0];if(f?.preview?.startsWith('blob:'))URL.revokeObjectURL(f.preview);paintDraft(kind);};
+window.kpRemoveAttachment=(kind,i)=>{const d=draft(kind),f=d.files.splice(i,1)[0];if(f?.blob&&kapaniActiveMediaUpload?.source===f.blob)cancelMediaUpload('Вложение удалено');if(f?.preview?.startsWith('blob:'))URL.revokeObjectURL(f.preview);paintDraft(kind);};
 window.kpClearReply=kind=>{draft(kind).reply=null;paintDraft(kind);};window.kpClearForward=kind=>{draft(kind).forward=null;paintDraft(kind);};
 const oldMediaFile=window.handleMediaFile;
 window.handleMediaFile=async(e,kind)=>{if(!['chat','dm'].includes(kind))return oldMediaFile(e,kind);const key=draftKey(kind),d=draft(kind),files=Array.from(e.target.files||[]);e.target.value='';await action('attachments:'+key,async()=>{if(d.files.length+files.length>6)throw new Error('В одном сообщении можно отправить до 6 вложений');for(const file of files){const type=file.type.startsWith('video/')?'video':file.type.startsWith('image/')?'image':null;if(!type)throw new Error('Выберите фото или видео');if(file.size>(type==='video'?20:10)*1024*1024)throw new Error(type==='video'?'Видео должно быть меньше 20 МБ':'Фото должно быть меньше 10 МБ');let blob=file;if(type==='image'){const data=await compressImage(file,1600,.84);blob=await(await fetch(data)).blob();}d.files.push({blob,type,preview:URL.createObjectURL(blob)});}if(draftKey(kind)===key)paintDraft(kind);});};
@@ -14252,7 +14347,30 @@ window.kpReply=(kind,id)=>{const m=messageFrom(kind,id);draft(kind).reply={id,ni
 window.kpReact=(kind,id,emoji)=>action('reaction:'+id,async()=>{const data=await rpc('kp_message_v8',{p_action:'reaction',p_kind:kind,p_peer:kind==='dm'?currentDmNick:null,p_id:id,p_data:{emoji}});const cache=kind==='dm'?lastDmMsgs:lastChatMsgs;cache[id]=data;window.kpCloseSheet();rerenderMessages(kind);});
 window.kpEditMessage=(kind,id)=>{const m=messageFrom(kind,id);modal('Редактировать сообщение',`<textarea id="v8EditText" maxlength="4000">${html(m.text||m.caption||'')}</textarea>${button('Сохранить',`kpSaveMessage('${kind}','${jsEsc(id)}')`)}`);qs('v8EditText').focus();};
 window.kpSaveMessage=(kind,id)=>action('edit:'+id,async()=>{const data=await rpc('kp_message_v8',{p_action:'edit',p_kind:kind,p_peer:kind==='dm'?currentDmNick:null,p_id:id,p_data:{text:qs('v8EditText').value.trim()}});const cache=kind==='dm'?lastDmMsgs:lastChatMsgs;cache[id]=data;window.kpCloseSheet();rerenderMessages(kind);});
-window.kpDeleteMessage=(kind,id)=>action('delete:'+id,async()=>{if(!confirm('Удалить это сообщение у всех участников?'))return;await rpc('kp_message_v8',{p_action:'delete',p_kind:kind,p_peer:kind==='dm'?currentDmNick:null,p_id:id});const cache=kind==='dm'?lastDmMsgs:lastChatMsgs;delete cache[id];window.kpCloseSheet();rerenderMessages(kind);});
+window.kpDeleteMessage=(kind,id)=>action('delete:'+id,async()=>{
+    if(!confirm('Удалить это сообщение у всех участников?'))return;
+    const peer=kind==='dm'?currentDmNick:null;
+    if(peer){
+        try{await rpc('kp_dm_delete_v13',{p_peer:peer,p_id:id});}
+        catch(e){
+            if(!/PGRST202|Could not find|function.*does not exist|Unknown function/i.test(String(e?.message||e)))throw e;
+            // Compatibility while the owner has not installed SQL 017 yet.
+            await rpc('kp_message_v8',{p_action:'delete',p_kind:'dm',p_peer:peer,p_id:id});
+            console.warn('[Kapani DM deletion] SQL 017 is required for atomic preview updates');
+        }
+    }else await rpc('kp_message_v8',{p_action:'delete',p_kind:kind,p_peer:null,p_id:id});
+    const cache=kind==='dm'?lastDmMsgs:lastChatMsgs;
+    delete cache[id];
+    if(peer){
+        const latest=latestMessageFrom(cache);
+        dmVerifiedPreviews.set(peer,{checkedAt:Date.now(),checkedIndexTs:dmIndexObservedTs.get(peer)||0,latest,lastTs:Number(latest?.createdAt||0)});
+        const meta=dmConvoMeta[peer]||{};
+        dmConvoMeta[peer]={...meta,latest,lastTs:Number(latest?.createdAt||0),unread:false};
+        renderDmUserList(allUsersCache);
+        // The v13 server RPC has already updated both previews atomically.
+    }
+    window.kpCloseSheet();rerenderMessages(kind);
+});
 window.deleteChat=id=>window.kpDeleteMessage('chat',id);window.deleteDm=id=>window.kpDeleteMessage('dm',id);
 window.kpForward=(kind,id)=>{const source=kind==='dm'?`dms/${dmKey(currentNick,currentDmNick)}/messages/${id}`:`chat/${id}`;v8.forwardSource=source;modal('Переслать сообщение',`<label>Получатель<select id="v8ForwardTo"><option value="">Общий чат</option>${Object.entries(allUsersCache||{}).filter(([n])=>n!==currentNick).map(([nick,u])=>`<option value="${html(nick)}">${html(displayNick(u)||nick)}</option>`).join('')}</select></label>${button('Выбрать чат','kpChooseForward()')}`);};
 window.kpChooseForward=async()=>{const nick=qs('v8ForwardTo').value;window.kpCloseSheet();if(nick){switchMsgTab(1);await window.openDmChat(nick);}else switchMsgTab(0);const kind=nick?'dm':'chat';draft(kind).forward={path:v8.forwardSource};paintDraft(kind);};
@@ -14329,6 +14447,13 @@ window.submitJanitorDone=()=>action('janitor-submit',async()=>{if(!window._janit
 window.submitPoliceRequest=()=>action('police-request',async()=>{await civic('police',{target:qs('polTarget')?.value.trim(),type:qs('polType')?.value==='delete'?'freeze':qs('polType')?.value,amount:Number(qs('polAmount')?.value||0),reason:qs('polReason')?.value.trim()});});
 window.submitBizDeleteRequest=()=>action('business-close',async()=>{await civic('business_close',{bizId:_pendingDeleteBizId,reason:qs('bizDeleteReason')?.value.trim()});closeBizDeleteRequestModal();});
 window.kpReviewCivic=(kind,id,accept)=>action('review:'+id,async()=>{await rpc('kp_civic_v8',{p_action:accept?'approve':'reject',p_kind:kind,p_id:id});await window.kpLoadCivic();await renderAdmin();toast('Решение сохранено','green');});
+window.kapaniCloseKEducation=(nick,id='')=>action('education-close:'+nick,async()=>{
+    if(currentNick!==ADMIN)throw new Error('Закрывать заявки может только мэр');
+    if(!confirm(`Закрыть заявку на К-образование жителя ${nick}? Оплата останется в истории, повторное списание не производится.`))return;
+    await rpc('kp_education_close_v13',{p_nick:nick,p_request_id:id||''});
+    await window.kapaniRefreshAdminKEducation?.();
+    toast('Заявка закрыта, житель получит уведомление','green');
+});
 window.approvePoliceRequest=id=>window.kpReviewCivic('police',id,true);window.rejectPoliceRequest=id=>window.kpReviewCivic('police',id,false);
 window.adminApproveBizDelete=id=>window.kpReviewCivic('business_close',id,true);window.adminRejectBizDelete=id=>window.kpReviewCivic('business_close',id,false);
 window.kpLoadCivic=async()=>{if(currentNick!==ADMIN)return;let host=qs('v8Civic');if(!host){host=document.createElement('div');host.className='card';host.id='v8Civic';qs('adminPage').prepend(host);}const queues=await Promise.all(['civicRequests','janitorSubmissions','policeRequests','bizDeleteRequests'].map(async branch=>[branch,(await get(ref(db,branch))).val()||{}]));const labels={education:'К-образование',scooter:'Права на скутер',bike:'Права на велосипед',janitor:'Отчёт уборщика',police:'Обращение полиции',business_close:'Закрытие бизнеса'};host.innerHTML='<h2>Единая очередь заявок</h2><p class="v8-muted">Заявки на работу и открытие бизнеса находятся в своих блоках ниже. Решение сохраняется вместе с выплатой или возвратом.</p>'+queues.flatMap(([branch,items])=>Object.entries(items).filter(([,x])=>x.status==='pending').map(([id,x])=>{const kind=x.kind||({janitorSubmissions:'janitor',policeRequests:'police',bizDeleteRequests:'business_close'})[branch];return `<article class="v8-application"><div class="v8-eyebrow">${html(labels[kind]||kind)}</div><h3>${html(x.from||x.worker||x.owner||x.officer)}</h3><p>${html(x.reason||x.comment||'Заявка ожидает проверки')}</p>${x.photo?`<img class="v8-proof" src="${html(safeURL(x.photo))}" alt="Фото отчёта" loading="lazy">`:''}<p>${kind==='janitor'?'Вознаграждение после одобрения: 500 ₽':kind==='scooter'?'Одобрить только после проверки экзамена':kind==='police'?`Житель: ${html(x.target)} · ${x.type==='fine'?money(x.amount):'Заморозка аккаунта'}`:''}</p><div class="v8-actions">${button('Одобрить',`kpReviewCivic('${kind}','${jsEsc(id)}',true)`)}${button('Отклонить',`kpReviewCivic('${kind}','${jsEsc(id)}',false)`,'btn btn-ghost')}</div></article>`;})).join('');};

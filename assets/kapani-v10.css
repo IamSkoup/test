@@ -54,6 +54,30 @@
   #casino .v8-game-card,#casino .v8-casino-banner,#casino .v8-game-stage{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
 
+/* Stable, low-memory rendering for the casino on phones. No fullscreen
+   compositing blur, rotating artwork or costly repeated transformations. */
+html.kp-casino-lite body{background-attachment:scroll!important;}
+html.kp-casino-lite #casino .v8-casino-banner,
+html.kp-casino-lite #casino .v8-game-card,
+html.kp-casino-lite #casino .v8-game-stage{
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+  filter:none!important;animation:none!important;transition:none!important;
+  box-shadow:none!important;will-change:auto!important;
+}
+html.kp-casino-lite #casino .v8-casino-banner>img,
+html.kp-casino-lite #casino .v8-game-card>img,
+html.kp-casino-lite #casino .v8-game-stage>img{
+  filter:none!important;animation:none!important;transition:none!important;
+  will-change:auto!important;
+}
+html.kp-casino-lite #casino .v8-game-card>img{max-height:138px;object-fit:contain;}
+html.kp-casino-lite #casino .v8-casino-banner>img{width:42%;max-height:190px;transform:none!important;opacity:.65;}
+html.kp-casino-lite #kpV8Sheet.v8-overlay{
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+  background:rgba(1,16,10,.95)!important;
+}
+html.kp-casino-lite #kpV8Sheet>.v8-sheet{animation:none!important;filter:none!important;}
+
 @media(min-width:820px){
   #profile.section.active{
     display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));

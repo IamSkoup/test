@@ -18,6 +18,8 @@ const source = fs.readFileSync(path.join(root, 'assets/kapani-main-classic.js'),
         return route.continue();
       });
       await page.goto('about:blank');
+      await page.addStyleTag({path:path.join(root,'redesign.css')});
+      await page.addStyleTag({path:path.join(root,'assets/kapani-forest.css')});
       await page.addStyleTag({path:path.join(root,'assets/kapani-v8.css')});
       await page.addStyleTag({path:path.join(root,'assets/kapani-v10.css')});
       const syntax = await page.evaluate(code => {
@@ -41,6 +43,10 @@ const source = fs.readFileSync(path.join(root, 'assets/kapani-main-classic.js'),
           return {x:box.x,y:box.y,w:box.width,h:box.height,cx:box.x+box.width/2,cy:box.y+box.height/2,handlerValid};
         }, {markup,panel});
         assert.ok(result.handlerValid, `${label} ${name}: invalid inline click handler`);
+        if(name==='casino'){
+          const overlayWidth=await page.evaluate(()=>document.querySelector('#kpV8Sheet').getBoundingClientRect().width);
+          assert.ok(Math.abs(overlayWidth-width)<=1,`${label} casino overlay must cover the full viewport, not just its 640px child`);
+        }
         assert.ok(Math.abs(result.cx-width/2)<=3, `${label} ${name}: dialog shifted horizontally ${JSON.stringify(result)}`);
         assert.ok(Math.abs(result.cy-height/2)<=3, `${label} ${name}: dialog shifted vertically ${JSON.stringify(result)}`);
       }

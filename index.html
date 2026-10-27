@@ -1208,7 +1208,7 @@ body.kapani-shutdown-notice-open{overflow:hidden!important;}
 </style>
 <link rel="stylesheet" href="assets/kapani-v8.css?v=8">
 <link rel="stylesheet" href="assets/kapani-finishes.css?v=9">
-<link rel="stylesheet" href="assets/kapani-v10.css?v=12">
+<link rel="stylesheet" href="assets/kapani-v10.css?v=13">
 </head>
 <body>
 
@@ -2824,7 +2824,7 @@ window.kapaniLoadLeaflet = (function(){
 <script src="./functions/subscription-config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8" defer></script>
 <script src="./assets/supabase-bridge-classic.js" defer></script>
-<script src="./assets/kapani-main-classic.js?v=12" defer></script>
+<script src="./assets/kapani-main-classic.js?v=13" defer></script>
 
 <script>
 // ═══════════════════════════════════════════════════
@@ -3444,7 +3444,7 @@ window.kapaniLoadLeaflet = (function(){
       const host=qs('kEducationContent'); if(!host || !current()) return;
       const snap=await get(userRef(current())); const u=snap.val()||{};
       const purchase=u.kEducationPurchase||{};
-      const paid = purchase.status==='paid' || purchase.status==='submitted';
+      const paid = ['paid','submitted','approved'].includes(purchase.status);
       host.innerHTML=`
         <div class="card" style="background:linear-gradient(145deg,rgba(240,68,74,.09),rgba(255,128,106,.06));border-color:rgba(240,68,74,.3);">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
@@ -3460,7 +3460,7 @@ window.kapaniLoadLeaflet = (function(){
           ${paid
             ? `<div style="padding:14px;border-radius:14px;background:var(--pri-dim);border:1px solid rgba(240,68,74,.28);font-size:13px;line-height:1.65;">
                  <div style="font-size:15px;font-weight:900;color:var(--primary);">✅ К-образование оплачено</div>
-                 <div style="margin-top:4px;">Заявка уже отправлена в мэрию.</div>
+                 <div style="margin-top:4px;">${purchase.status==='approved'?'Мэрия закрыла заявку. Оплата и история сохранены.':'Заявка уже отправлена в мэрию.'}</div>
                  <div style="color:var(--muted);font-size:11px;margin-top:6px;">Дата покупки: ${formatDate(purchase.createdAt)}</div>
                </div>`
             : `<div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:12px;">После оплаты 2 000 ₽ списываются с основного баланса и поступают государству. Дополнительного одобрения покупки не требуется.</div>
@@ -3481,13 +3481,13 @@ window.kapaniLoadLeaflet = (function(){
       try{
         const nick=current();
         const uSnap=await get(userRef(nick)); const u=uSnap.val()||{};
-        if(u.kEducationPurchase?.status==='paid'||u.kEducationPurchase?.status==='submitted') return toast('✅ К-образование уже оплачено','gold');
+        if(['paid','submitted','approved'].includes(u.kEducationPurchase?.status)) return toast('✅ К-образование уже оплачено','gold');
         const p=await getPassportData(nick,u);
         const purchaseId=genId();
         const purchaseCreatedAt=Date.now();
         const result=await runTransaction(userRef(nick),cu=>{
           if(!cu) return;
-          if(cu.kEducationPurchase?.status==='paid'||cu.kEducationPurchase?.status==='submitted') return;
+          if(['paid','submitted','approved'].includes(cu.kEducationPurchase?.status)) return;
           const bal=Number(cu.balance||0); if(bal<2000) return;
           return {...cu,balance:bal-2000,kEducationPurchase:{id:purchaseId,status:'submitted',createdAt:purchaseCreatedAt,nick,displayName:String(cu.displayName||nick),firstName:String(p.firstName||cu.firstName||''),lastName:String(p.lastName||cu.lastName||'')}};
         });
@@ -3509,8 +3509,9 @@ window.kapaniLoadLeaflet = (function(){
       const rows=Object.entries(users).map(([nick,u])=>({nick,u,p:u?.kEducationPurchase||{}})).filter(x=>x.p.status==='submitted'||x.p.status==='paid').sort((a,b)=>(b.p.createdAt||0)-(a.p.createdAt||0));
       host.innerHTML=rows.length?rows.map(({nick,u,p})=>`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px;">
         <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="openUserProfile('${jsEsc(nick)}')"><img src="${esc(window.safeAvatar?window.safeAvatar(nick):u.avatar||'')}" style="width:42px;height:42px;border-radius:12px;object-fit:cover;"><div style="flex:1"><div style="font-weight:900;">${esc(p.displayName||u.displayName||nick)}</div><div style="font-size:11px;color:var(--muted);">${esc(p.firstName||'—')} ${esc(p.lastName||'')} · @${esc(nick)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${formatDate(p.createdAt)} · ${esc(p.status||'submitted')}</div></div></div>
-        <div style="display:flex;gap:8px;margin-top:10px;"><button class="btn btn-ghost btn-sm" onclick="goToChat('${jsEsc(nick)}')">💬 Связаться</button></div></div>`).join(''):'<div style="color:var(--muted);font-size:13px;">Заявок нет</div>';
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;"><button class="btn btn-ghost btn-sm" onclick="goToChat('${jsEsc(nick)}')">💬 Связаться</button><button class="btn btn-primary btn-sm" onclick="kapaniCloseKEducation('${jsEsc(nick)}','${jsEsc(p.id||'')}')">Закрыть заявку</button></div></div>`).join(''):'<div style="color:var(--muted);font-size:13px;">Заявок нет</div>';
     }
+    window.kapaniRefreshAdminKEducation=renderAdminKEducation;
 
     // ────────────────────────────────────────────────────────────────
     // Casino: separate balance + exactly Blackjack + ordinary European roulette.
@@ -4097,6 +4098,11 @@ window.kapaniLoadLeaflet = (function(){
     window._kapaniEconomyNavHandlesRender = true;
     window.navTo=function(id){
       try{
+        // Cheap phones can exhaust GPU compositing memory when casino artwork,
+        // translucent cards and animated sheets are layered together.
+        const lowMemoryPhone=window.matchMedia('(max-width:760px)').matches
+          || (Number(navigator.deviceMemory||8)<=4);
+        document.documentElement.classList.toggle('kp-casino-lite',id==='casino'&&lowMemoryPhone);
         // Guarantee that the destination exists BEFORE the original navigator hides all sections.
         if(id==='kEducation' || id==='casino' || id==='autoSchool') ensureEconomySections();
       }catch(e){}
